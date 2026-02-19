@@ -350,7 +350,12 @@
       corner: -1,
       x: 0,
       y: 0,
+      lastLiveX: -1,
+      lastLiveY: -1,
+      lastLiveErr: 0,
     };
+
+    let liveHandleRaf = 0;
 
     function startDragCorner(areaIndex, cornerIndex, x, y) {
       dragState.active = true;
@@ -373,9 +378,36 @@
       dragState.handleIndex = handleIndex;
       dragState.x = x;
       dragState.y = y;
+      dragState.lastLiveX = -1;
+      dragState.lastLiveY = -1;
+      dragState.lastLiveErr = 0;
       ui.dragDot.style.display = "block";
       ui.dragDot.style.left = `${x}px`;
       ui.dragDot.style.top = `${y}px`;
+    }
+
+    function scheduleLiveHandleMove() {
+      if (liveHandleRaf !== 0) return;
+      liveHandleRaf = requestAnimationFrame(() => {
+        let err;
+        liveHandleRaf = 0;
+        if (!dragState.active || dragState.mode !== "handle") return;
+        if (dragState.x === dragState.lastLiveX && dragState.y === dragState.lastLiveY) {
+          return;
+        }
+
+        err = api.move_handle(dragState.handleIndex, dragState.x, dragState.y);
+        if (err === 0) {
+          dragState.lastLiveX = dragState.x;
+          dragState.lastLiveY = dragState.y;
+          dragState.lastLiveErr = 0;
+          render();
+        } else if (err !== dragState.lastLiveErr) {
+          dragState.lastLiveErr = err;
+          log(`move_handle(${dragState.handleIndex}, ${dragState.x}, ${dragState.y}) => ${err} (${ERR[err] || "unknown"})`);
+          render();
+        }
+      });
     }
 
     function log(line) {
@@ -562,6 +594,9 @@
       dragState.y = local.y;
       ui.dragDot.style.left = `${local.x}px`;
       ui.dragDot.style.top = `${local.y}px`;
+      if (dragState.mode === "handle") {
+        scheduleLiveHandleMove();
+      }
     });
 
     document.addEventListener("pointerup", () => {
@@ -573,6 +608,11 @@
       const handle = dragState.handleIndex;
       const mode = dragState.mode;
 
+      if (liveHandleRaf !== 0) {
+        cancelAnimationFrame(liveHandleRaf);
+        liveHandleRaf = 0;
+      }
+
       dragState.active = false;
       dragState.mode = "none";
       ui.dragDot.style.display = "none";
@@ -580,7 +620,11 @@
       if (mode === "corner") {
         callAndRender(`move_corner(${area}, ${corner}, ${x}, ${y})`, () => api.move_corner(area, corner, x, y));
       } else if (mode === "handle") {
-        callAndRender(`move_handle(${handle}, ${x}, ${y})`, () => api.move_handle(handle, x, y));
+        if (dragState.lastLiveX === x && dragState.lastLiveY === y) {
+          render();
+        } else {
+          callAndRender(`move_handle(${handle}, ${x}, ${y})`, () => api.move_handle(handle, x, y));
+        }
       }
     });
 

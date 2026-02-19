@@ -131,17 +131,24 @@ async function run() {
   assertEq(api.move_corner(0, 1, 720, 200), ERR.NOT_IMPLEMENTED, "cross-area corner move triggers merge-not-implemented");
   assertEq(api.set_area_content(9, 42), ERR.INVALID_AREA, "set_area_content invalid area");
 
+  assertEq(api.move_corner(0, 2, 200, 300), ERR.OK, "second split inside area succeeds");
+  assertEq(api.move_handle(0, 450, 200), ERR.OK, "original handle still movable after second split");
+
   assertEq(api.set_handle_content(0, 777), ERR.OK, "set_handle_content succeeds");
   assertEq(handle0[4], 777, "handle0 content updated");
   assertEq(api.set_handle_content(99, 1), ERR.INVALID_HANDLE, "set_handle_content invalid handle");
 
+  const preResizeArea0X1 = area0[2];
+  const preResizeArea0Y1 = area0[3];
+  const preResizeArea1X0 = area1[0];
+  const preResizeArea1X1 = area1[2];
   assertEq(api.resize_screen(1200, 900), ERR.OK, "resize_screen succeeds");
   assertEq(header[1], 1200, "screen width after resize");
   assertEq(header[2], 900, "screen height after resize");
-  assertEq(area0[2], 600, "area0 x1 scales on resize");
-  assertEq(area0[3], 900, "area0 y1 scales on resize");
-  assertEq(area1[0], 600, "area1 x0 scales on resize");
-  assertEq(area1[2], 1200, "area1 x1 scales on resize");
+  assertEq(area0[2], Math.trunc(preResizeArea0X1 * 1200 / 800), "area0 x1 scales on resize");
+  assertEq(area0[3], Math.trunc(preResizeArea0Y1 * 900 / 600), "area0 y1 scales on resize");
+  assertEq(area1[0], Math.trunc(preResizeArea1X0 * 1200 / 800), "area1 x0 scales on resize");
+  assertEq(area1[2], Math.trunc(preResizeArea1X1 * 1200 / 800), "area1 x1 scales on resize");
 
   console.log("[test] all checks passed");
 }
