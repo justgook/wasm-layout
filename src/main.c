@@ -196,10 +196,168 @@ static int32_t collect_segments(int32_t axis, BoundarySegment *out,
 }
 
 /*
+ * Find the contiguous boundary sub-range at a given coord that covers
+ * the handle midpoint. This prevents merging independent handles that
+ * happen to touch at one point (e.g. two horizontal handles meeting
+ * at a vertical split).
+ *
+ * Walk the raw (unmerged) boundary pairs and flood-fill from the handle's
+ * midpoint to find only the connected portion.
+ */
+static void find_contiguous_boundary(int32_t axis, int32_t coord,
+                                     int32_t h_mid, int32_t *out_a0,
+                                     int32_t *out_a1) {
+  int32_t i;
+  int32_t j;
+  int32_t raw_count = 0;
+  int32_t a0s[MAX_SEGMENTS];
+  int32_t a1s[MAX_SEGMENTS];
+  int32_t merged;
+  int32_t region_a0;
+  int32_t region_a1;
+
+  /* collect raw boundary sub-segments at this coord */
+  for (i = 0; i < g_data.area_count; ++i) {
+    for (j = 0; j < g_data.area_count; ++j) {
+      int32_t s0;
+      int32_t s1;
+      LayoutArea *a;
+      LayoutArea *b;
+      if (i == j) {
+        continue;
+      }
+      a = &g_data.areas[i];
+      b = &g_data.areas[j];
+
+      if (axis == 0) {
+        if (a->x1 != coord || b->x0 != coord) {
+          continue;
+        }
+        s0 = a->y0 > b->y0 ? a->y0 : b->y0;
+        s1 = a->y1 < b->y1 ? a->y1 : b->y1;
+      } else {
+        if (a->y1 != coord || b->y0 != coord) {
+          continue;
+        }
+        s0 = a->x0 > b->x0 ? a->x0 : b->x0;
+        s1 = a->x1 < b->x1 ? a->x1 : b->x1;
+      }
+
+      if (s1 <= s0 || raw_count >= MAX_SEGMENTS) {
+        continue;
+      }
+      a0s[raw_count] = s0;
+      a1s[raw_count] = s1;
+      raw_count += 1;
+    }
+  }
+
+  if (raw_count == 0) {
+    *out_a0 = 0;
+    *out_a1 = 0;
+    return;
+  }
+
+  /* find the sub-segment that contains h_mid, then flood-fill connected */
+  region_a0 = 0;
+  region_a1 = 0;
+  for (i = 0; i < raw_count; ++i) {
+    if (h_mid >= a0s[i] && h_mid <= a1s[i]) {
+      region_a0 = a0s[i];
+      region_a1 = a1s[i];
+      break;
+    }
+  }
+
+  if (region_a0 == region_a1) {
+    /* midpoint not inside any sub-segment, pick closest */
+    int32_t best_d = 0x7fffffff;
+    for (i = 0; i < raw_count; ++i) {
+      int32_t mid = (a0s[i] + a1s[i]) / 2;
+      int32_t d = mid - h_mid;
+      if (d < 0) {
+        d = -d;
+      }
+      if (d < best_d) {
+        best_d = d;
+        region_a0 = a0s[i];
+        region_a1 = a1s[i];
+      }
+    }
+  }
+
+  /*
+   * Expand region by merging overlapping sub-segments.
+   * For sub-segments that merely touch (share one endpoint), only merge
+   * if no perpendicular boundary exists at that touching point.
+   * A perpendicular boundary at the touch point means a T-junction where
+   * the handles should stay independent.
+   */
+  do {
+    merged = 0;
+    for (i = 0; i < raw_count; ++i) {
+      int32_t do_merge = 0;
+      if (a0s[i] < region_a1 && a1s[i] > region_a0) {
+        /* strict overlap -> always merge */
+        do_merge = 1;
+      } else if (a0s[i] == region_a1 || a1s[i] == region_a0) {
+        /*
+         * Touching at one point. Merge only if the two sub-segments
+         * share a common area on at least one side of the boundary
+         * at the touching point. If areas on left and right of the
+         * boundary are different across the touch point, the handles
+         * are independent.
+         */
+        int32_t touch_pt = (a0s[i] == region_a1) ? a0s[i] : a1s[i];
+        int32_t share = 0;
+        int32_t k;
+        for (k = 0; k < g_data.area_count && !share; ++k) {
+          LayoutArea *ak = &g_data.areas[k];
+          if (axis == 0) {
+            /* vertical boundary at x=coord; touch_pt is a y value */
+            /* area must span across touch_pt on the y axis */
+            if (ak->y0 < touch_pt && ak->y1 > touch_pt) {
+              /* area touches boundary on left or right */
+              if (ak->x1 == coord || ak->x0 == coord) {
+                share = 1;
+              }
+            }
+          } else {
+            /* horizontal boundary at y=coord; touch_pt is an x value */
+            if (ak->x0 < touch_pt && ak->x1 > touch_pt) {
+              if (ak->y1 == coord || ak->y0 == coord) {
+                share = 1;
+              }
+            }
+          }
+        }
+        if (share) {
+          do_merge = 1;
+        }
+      }
+      if (do_merge) {
+        if (a0s[i] < region_a0) {
+          region_a0 = a0s[i];
+          merged = 1;
+        }
+        if (a1s[i] > region_a1) {
+          region_a1 = a1s[i];
+          merged = 1;
+        }
+      }
+    }
+  } while (merged);
+
+  *out_a0 = region_a0;
+  *out_a1 = region_a1;
+}
+
+/*
  * Match a handle to its corresponding boundary segment.
- * Uses the handle's current span to find the segment that contains it
- * (not just closest-midpoint). This keeps handles in a + layout independent
- * even though segments at the same coord now merge freely.
+ * Uses contiguous boundary flood-fill from handle midpoint to determine
+ * exact span. This keeps handles independent even when their segments
+ * touch at a single point (e.g. + layout, or two horizontal handles
+ * meeting at a vertical divider).
  */
 static int32_t update_handle_from_topology(int32_t handle_index) {
   int32_t axis;
@@ -213,6 +371,8 @@ static int32_t update_handle_from_topology(int32_t handle_index) {
   BoundarySegment segs[MAX_SEGMENTS];
   int32_t seg_count;
   LayoutHandle *h;
+  int32_t region_a0;
+  int32_t region_a1;
 
   if (!is_valid_handle_index(handle_index)) {
     return 0;
@@ -238,12 +398,7 @@ static int32_t update_handle_from_topology(int32_t handle_index) {
     return 0;
   }
 
-  /*
-   * Matching strategy:
-   * 1) Prefer segments at the exact same coord that overlap the handle span.
-   * 2) Among those, prefer the one whose span contains the handle midpoint.
-   * 3) Fall back to closest coord + closest midpoint if no overlap found.
-   */
+  /* find best matching merged segment (for coord) */
   for (i = 0; i < seg_count; ++i) {
     int32_t d_coord = segs[i].coord - target_coord;
     int32_t seg_contains_mid;
@@ -257,12 +412,6 @@ static int32_t update_handle_from_topology(int32_t handle_index) {
     seg_contains_mid = (h_mid >= segs[i].a0 && h_mid <= segs[i].a1);
     spans_overlap = overlap_len(segs[i].a0, segs[i].a1, h_span0, h_span1) > 0;
 
-    /*
-     * Score: lower is better.
-     * - Exact coord match + contains midpoint: best possible
-     * - Exact coord match + span overlap: next best
-     * - Otherwise fall back to distance-based
-     */
     if (d_coord == 0 && seg_contains_mid) {
       score = 0;
     } else if (d_coord == 0 && spans_overlap) {
@@ -285,16 +434,30 @@ static int32_t update_handle_from_topology(int32_t handle_index) {
     return 0;
   }
 
+  /*
+   * Instead of using the full merged segment span, find the contiguous
+   * sub-range that actually covers the handle's midpoint. This prevents
+   * two handles from "sticking" when they touch at a single point.
+   */
+  find_contiguous_boundary(axis, segs[best].coord, h_mid, &region_a0,
+                           &region_a1);
+
+  if (region_a0 >= region_a1) {
+    /* fallback: use full segment */
+    region_a0 = segs[best].a0;
+    region_a1 = segs[best].a1;
+  }
+
   if (axis == 0) {
     int32_t x = segs[best].coord;
     h->x0 = clamp_i32(x - HANDLE_HALF_SIZE, 0, g_data.screen_w);
     h->x1 = clamp_i32(x + HANDLE_HALF_SIZE, 0, g_data.screen_w);
-    h->y0 = clamp_i32(segs[best].a0, 0, g_data.screen_h);
-    h->y1 = clamp_i32(segs[best].a1, 0, g_data.screen_h);
+    h->y0 = clamp_i32(region_a0, 0, g_data.screen_h);
+    h->y1 = clamp_i32(region_a1, 0, g_data.screen_h);
   } else {
     int32_t y = segs[best].coord;
-    h->x0 = clamp_i32(segs[best].a0, 0, g_data.screen_w);
-    h->x1 = clamp_i32(segs[best].a1, 0, g_data.screen_w);
+    h->x0 = clamp_i32(region_a0, 0, g_data.screen_w);
+    h->x1 = clamp_i32(region_a1, 0, g_data.screen_w);
     h->y0 = clamp_i32(y - HANDLE_HALF_SIZE, 0, g_data.screen_h);
     h->y1 = clamp_i32(y + HANDLE_HALF_SIZE, 0, g_data.screen_h);
   }

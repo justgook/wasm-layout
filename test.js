@@ -241,6 +241,51 @@ async function run() {
   assertEq(api.move_handle(3, 475, 400), ERR.OK, "3col: move h3 to y=400");
 
   console.log("[test] 3-column regression passed");
+
+  /* ========================================================
+   * Regression: sticky handles (two horizontal handles meeting
+   * at a vertical split should NOT merge when moved to same y)
+   * ========================================================
+   * Repro: init 400x400, split vertical at x=185, split left at y=116,
+   * split right at y=164. Then move left h-handle toward y=164.
+   * Handles must stay independent.
+   */
+  assertEq(api.init_screen(400, 400), ERR.OK, "sticky: init_screen");
+  assertEq(api.move_corner(0, 1, 185, 40), ERR.OK, "sticky: vertical split");
+  assertEq(api.move_corner(0, 0, 7, 116), ERR.OK, "sticky: left h-split");
+  assertEq(api.move_corner(1, 1, 392, 164), ERR.OK, "sticky: right h-split");
+
+  // h0 = vertical at x=185 (full height)
+  // h1 = horizontal in left col (x: 0..185)
+  // h2 = horizontal in right col (x: 185..400)
+  const sh0 = handleAtIndex(0);
+  const sh1 = handleAtIndex(1);
+  const sh2 = handleAtIndex(2);
+
+  // Verify h1 spans only left column
+  assertEq(sh1[0], 0, "sticky: h1 x0 = 0 (left col)");
+  assertEq(sh1[2], 185, "sticky: h1 x1 = 185 (left col)");
+
+  // Verify h2 spans only right column
+  assertEq(sh2[0], 185, "sticky: h2 x0 = 185 (right col)");
+  assertEq(sh2[2], 400, "sticky: h2 x1 = 400 (right col)");
+
+  // Move h1 down to same y as h2 (y=164)
+  assertEq(api.move_handle(1, 92, 164), ERR.OK, "sticky: move h1 to y=164");
+
+  // h1 must STILL span only left column
+  assertEq(sh1[0], 0, "sticky: h1 x0 still 0 after move to same y");
+  assertEq(sh1[2], 185, "sticky: h1 x1 still 185 after move to same y");
+
+  // h2 must STILL span only right column
+  assertEq(sh2[0], 185, "sticky: h2 x0 still 185 after move to same y");
+  assertEq(sh2[2], 400, "sticky: h2 x1 still 400 after move to same y");
+
+  // Both handles should still be independently movable
+  assertEq(api.move_handle(1, 92, 200), ERR.OK, "sticky: h1 still movable independently");
+  assertEq(api.move_handle(2, 292, 164), ERR.OK, "sticky: h2 still movable independently");
+
+  console.log("[test] sticky-handle regression passed");
   console.log("[test] all checks passed");
 }
 
