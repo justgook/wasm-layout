@@ -4,133 +4,589 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Layout WASM Mock Host</title>
+  <title>Layout WASM Playground</title>
   <style>
     :root {
-      color-scheme: dark;
+      --bg: #f3efe6;
+      --ink: #2f2620;
+      --panel: #fffaf0;
+      --line: #cfbfa8;
+      --accent: #2f7a68;
+      --accent-2: #d88e30;
+      --danger: #b13d2b;
+      --area-a: #d7efe7;
+      --area-b: #f6e9cf;
+      --area-c: #ecd8e8;
+    }
+
+    * {
+      box-sizing: border-box;
     }
 
     body {
       margin: 0;
-      font-family: "Iosevka Web", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-      background: radial-gradient(circle at top, #142433 0%, #0c141d 55%, #070b10 100%);
-      color: #d8e3ef;
+      color: var(--ink);
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 10% -20%, #fff8e9, transparent 50%),
+        radial-gradient(circle at 100% 0%, #e9f6ff, transparent 40%),
+        var(--bg);
+    }
+
+    .app {
       min-height: 100dvh;
       display: grid;
-      place-items: center;
-      padding: 20px;
-    }
-
-    .panel {
-      width: min(920px, 100%);
-      background: rgba(13, 22, 32, 0.88);
-      border: 1px solid #25384b;
-      border-radius: 14px;
+      grid-template-columns: 340px 1fr;
+      gap: 14px;
       padding: 14px;
-      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
     }
 
-    h1 {
-      margin: 0 0 10px;
-      font-size: 16px;
-      letter-spacing: 0.04em;
+    .sidebar,
+    .stage-wrap {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel) 88%, white);
+      box-shadow: 0 8px 22px rgba(47, 38, 32, 0.08);
     }
 
-    pre {
+    .sidebar {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .title {
       margin: 0;
-      background: #0a121a;
-      border: 1px solid #203347;
-      border-radius: 10px;
-      padding: 10px;
-      min-height: 180px;
-      max-height: 60vh;
-      overflow: auto;
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    label {
       font-size: 12px;
-      line-height: 1.45;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    input {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 32px;
+      padding: 6px 8px;
+      font: inherit;
+      color: inherit;
+      background: #fff;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 34px;
+      padding: 6px 10px;
+      font: inherit;
+      color: #fff;
+      background: linear-gradient(180deg, var(--accent), #1f5f50);
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: linear-gradient(180deg, #6f7a89, #515a68);
+    }
+
+    button.warn {
+      background: linear-gradient(180deg, var(--accent-2), #ba6e14);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .meta,
+    .log {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px;
+      background: #fff;
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      font-size: 12px;
+      max-height: 210px;
+      overflow: auto;
       white-space: pre-wrap;
+    }
+
+    .stage-wrap {
+      padding: 10px;
+      overflow: auto;
+      background: linear-gradient(180deg, #fefcf6, #fbf4e6);
+    }
+
+    #stage {
+      position: relative;
+      border: 1px solid #a99a84;
+      background:
+        linear-gradient(45deg, rgba(70, 64, 58, 0.06) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(70, 64, 58, 0.06) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(70, 64, 58, 0.06) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(70, 64, 58, 0.06) 75%);
+      background-size: 22px 22px;
+      background-position: 0 0, 0 11px, 11px -11px, -11px 0;
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.45);
+      min-width: 260px;
+      min-height: 220px;
+    }
+
+    .area {
+      position: absolute;
+      border: 2px solid rgba(47, 38, 32, 0.45);
+      border-radius: 10px;
+      overflow: visible;
+      transition: left 140ms ease, top 140ms ease, width 140ms ease, height 140ms ease;
+    }
+
+    .area:nth-child(3n+1) {
+      background: var(--area-a);
+    }
+
+    .area:nth-child(3n+2) {
+      background: var(--area-b);
+    }
+
+    .area:nth-child(3n+3) {
+      background: var(--area-c);
+    }
+
+    .area-header {
+      position: absolute;
+      left: 8px;
+      top: 6px;
+      padding: 2px 6px;
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      font-size: 11px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.78);
+      border: 1px solid rgba(47, 38, 32, 0.2);
+    }
+
+    .corner {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      background: var(--danger);
+      box-shadow: 0 1px 8px rgba(0, 0, 0, 0.25);
+      cursor: grab;
+    }
+
+    .corner:active {
+      cursor: grabbing;
+    }
+
+    .corner.c0 {
+      left: -6px;
+      top: -6px;
+    }
+
+    .corner.c1 {
+      right: -6px;
+      top: -6px;
+    }
+
+    .corner.c2 {
+      right: -6px;
+      bottom: -6px;
+    }
+
+    .corner.c3 {
+      left: -6px;
+      bottom: -6px;
+    }
+
+    .handle {
+      position: absolute;
+      border: 1px dashed #48505f;
+      background: rgba(31, 42, 58, 0.08);
+      border-radius: 4px;
+      cursor: move;
+      touch-action: none;
+      z-index: 1;
+    }
+
+    .handle::after {
+      content: attr(data-label);
+      position: absolute;
+      right: 4px;
+      top: 2px;
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      font-size: 10px;
+      color: #354152;
+      background: rgba(255, 255, 255, 0.72);
+      border-radius: 4px;
+      padding: 0 3px;
+      pointer-events: none;
+    }
+
+    .drag-dot {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      background: #1d6aa2;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      display: none;
+      z-index: 2;
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .stage-wrap {
+        min-height: 55dvh;
+      }
     }
   </style>
 </head>
 
 <body>
-  <section class="panel">
-    <h1>Layout WASM Mock Host</h1>
-    <pre id="out">Loading...</pre>
-  </section>
+  <div class="app">
+    <aside class="sidebar">
+      <h1 class="title">Layout WASM Playground</h1>
+
+      <div class="row">
+        <label>Width
+          <input id="w" type="number" value="900" min="64">
+        </label>
+        <label>Height
+          <input id="h" type="number" value="620" min="64">
+        </label>
+      </div>
+
+      <div class="row">
+        <button id="init">Init Screen</button>
+        <button class="secondary" id="resize">Resize Screen</button>
+      </div>
+
+      <div class="row">
+        <label>Area Index
+          <input id="area-index" type="number" value="0" min="0">
+        </label>
+        <label>Area Content
+          <input id="area-content" type="number" value="0">
+        </label>
+      </div>
+
+      <button class="warn" id="set-area-content">Set Area Content</button>
+
+      <pre class="meta" id="meta">loading...</pre>
+      <pre class="log" id="log">booting...</pre>
+    </aside>
+
+    <main class="stage-wrap">
+      <div id="stage">
+        <div class="drag-dot" id="drag-dot"></div>
+      </div>
+    </main>
+  </div>
 
   <script type="module">
-    const out = document.getElementById("out");
+    const ABI = {
+      HEADER_I32: 13,
+      AREA_I32: 5,
+      HANDLE_I32: 5,
+      MAX_PANELS: 16,
+    };
+
+    const ERR = {
+      0: "ok",
+      1: "not_initialized",
+      2: "invalid_arg",
+      3: "invalid_handle",
+      4: "invalid_area",
+      5: "invalid_corner",
+      6: "out_of_bounds",
+      7: "min_size",
+      8: "not_implemented",
+      9: "capacity",
+    };
+
+    const ui = {
+      w: document.getElementById("w"),
+      h: document.getElementById("h"),
+      init: document.getElementById("init"),
+      resize: document.getElementById("resize"),
+      areaIndex: document.getElementById("area-index"),
+      areaContent: document.getElementById("area-content"),
+      setAreaContent: document.getElementById("set-area-content"),
+      stage: document.getElementById("stage"),
+      dragDot: document.getElementById("drag-dot"),
+      meta: document.getElementById("meta"),
+      log: document.getElementById("log"),
+    };
+
+    let api = null;
+    let memory = null;
+    let dataPtr = 0;
+
+    const dragState = {
+      active: false,
+      mode: "none",
+      areaIndex: -1,
+      handleIndex: -1,
+      corner: -1,
+      x: 0,
+      y: 0,
+    };
+
+    function startDragCorner(areaIndex, cornerIndex, x, y) {
+      dragState.active = true;
+      dragState.mode = "corner";
+      dragState.areaIndex = areaIndex;
+      dragState.corner = cornerIndex;
+      dragState.handleIndex = -1;
+      dragState.x = x;
+      dragState.y = y;
+      ui.dragDot.style.display = "block";
+      ui.dragDot.style.left = `${x}px`;
+      ui.dragDot.style.top = `${y}px`;
+    }
+
+    function startDragHandle(handleIndex, x, y) {
+      dragState.active = true;
+      dragState.mode = "handle";
+      dragState.areaIndex = -1;
+      dragState.corner = -1;
+      dragState.handleIndex = handleIndex;
+      dragState.x = x;
+      dragState.y = y;
+      ui.dragDot.style.display = "block";
+      ui.dragDot.style.left = `${x}px`;
+      ui.dragDot.style.top = `${y}px`;
+    }
 
     function log(line) {
-      out.textContent += `${line}\n`;
-      out.scrollTop = out.scrollHeight;
+      ui.log.textContent += `${line}\n`;
+      ui.log.scrollTop = ui.log.scrollHeight;
+    }
+
+    function i32() {
+      return new Int32Array(memory.buffer, dataPtr);
+    }
+
+    function header() {
+      const v = i32();
+      return {
+        initialized: v[0],
+        screenW: v[1],
+        screenH: v[2],
+        maxPanels: v[3],
+        maxHandles: v[4],
+        areaCount: v[5],
+        handleCount: v[6],
+        lastError: v[7],
+        generation: v[8],
+        lastAction: v[9],
+        lastIndex: v[10],
+        lastX: v[11],
+        lastY: v[12],
+      };
+    }
+
+    function areaAt(index) {
+      const base = ABI.HEADER_I32 + index * ABI.AREA_I32;
+      const v = i32();
+      return {
+        x0: v[base + 0],
+        y0: v[base + 1],
+        x1: v[base + 2],
+        y1: v[base + 3],
+        content: v[base + 4],
+      };
+    }
+
+    function handleAt(index) {
+      const handleBase = ABI.HEADER_I32 + ABI.MAX_PANELS * ABI.AREA_I32;
+      const base = handleBase + index * ABI.HANDLE_I32;
+      const v = i32();
+      return {
+        x0: v[base + 0],
+        y0: v[base + 1],
+        x1: v[base + 2],
+        y1: v[base + 3],
+        content: v[base + 4],
+      };
+    }
+
+    function toLocalStage(clientX, clientY) {
+      const rect = ui.stage.getBoundingClientRect();
+      const x = Math.floor(clientX - rect.left);
+      const y = Math.floor(clientY - rect.top);
+      return {x, y};
+    }
+
+    function render() {
+      const h = header();
+      ui.stage.style.width = `${Math.max(220, h.screenW)}px`;
+      ui.stage.style.height = `${Math.max(180, h.screenH)}px`;
+
+      Array.from(ui.stage.querySelectorAll(".area,.handle")).forEach((el) => el.remove());
+
+      for (let i = 0; i < h.handleCount; i += 1) {
+        const handle = handleAt(i);
+        const el = document.createElement("div");
+        el.className = "handle";
+        el.dataset.label = `h${i}`;
+        el.style.left = `${handle.x0}px`;
+        el.style.top = `${handle.y0}px`;
+        el.style.width = `${Math.max(1, handle.x1 - handle.x0)}px`;
+        el.style.height = `${Math.max(1, handle.y1 - handle.y0)}px`;
+        el.title = `move_handle(${i}, x, y), content=${handle.content}`;
+        el.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const local = toLocalStage(ev.clientX, ev.clientY);
+          startDragHandle(i, local.x, local.y);
+        });
+        ui.stage.appendChild(el);
+      }
+
+      for (let i = 0; i < h.areaCount; i += 1) {
+        const area = areaAt(i);
+        const el = document.createElement("div");
+        el.className = "area";
+        el.style.left = `${area.x0}px`;
+        el.style.top = `${area.y0}px`;
+        el.style.width = `${Math.max(1, area.x1 - area.x0)}px`;
+        el.style.height = `${Math.max(1, area.y1 - area.y0)}px`;
+
+        const head = document.createElement("div");
+        head.className = "area-header";
+        head.textContent = `area ${i} | content ${area.content}`;
+        el.appendChild(head);
+
+        for (let c = 0; c < 4; c += 1) {
+          const corner = document.createElement("div");
+          corner.className = `corner c${c}`;
+          corner.title = `move_corner(${i}, ${c}, x, y)`;
+          corner.addEventListener("pointerdown", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const local = toLocalStage(ev.clientX, ev.clientY);
+            startDragCorner(i, c, local.x, local.y);
+          });
+          el.appendChild(corner);
+        }
+
+        el.addEventListener("click", () => {
+          ui.areaIndex.value = String(i);
+          ui.areaContent.value = String(area.content);
+        });
+
+        ui.stage.appendChild(el);
+      }
+
+      ui.meta.textContent = [
+        `initialized: ${h.initialized}`,
+        `screen: ${h.screenW} x ${h.screenH}`,
+        `areas: ${h.areaCount}/${h.maxPanels}`,
+        `handles: ${h.handleCount}/${h.maxHandles}`,
+        `generation: ${h.generation}`,
+        `last_error: ${h.lastError} (${ERR[h.lastError] || "unknown"})`,
+        `last_action: ${h.lastAction}`,
+        `last_index: ${h.lastIndex}`,
+        `last_xy: ${h.lastX}, ${h.lastY}`,
+      ].join("\n");
+    }
+
+    function callAndRender(label, fn) {
+      const err = fn();
+      log(`${label} => ${err} (${ERR[err] || "unknown"})`);
+      render();
+      return err;
+    }
+
+    function readInt(input) {
+      return parseInt(input.value, 10) || 0;
     }
 
     async function boot() {
-      const HEADER_I32 = 13;
-      const AREA_I32 = 5;
-      const HANDLE_I32 = 5;
-      const MAX_PANELS = 16;
-
-      out.textContent = "";
       const response = await fetch("./layout.wasm");
       const wasmBytes = await response.arrayBuffer();
-
-      const memory = new WebAssembly.Memory({
+      memory = new WebAssembly.Memory({
         initial: 288,
         maximum: 512,
-        shared: true
+        shared: true,
       });
 
-      const {instance} = await WebAssembly.instantiate(wasmBytes, {
-        env: {memory}
-      });
+      const {instance} = await WebAssembly.instantiate(wasmBytes, {env: {memory}});
+      api = instance.exports;
+      dataPtr = api.get_data_ptr();
+      ui.log.textContent = "";
+      log(`wasm ready; exports: ${Object.keys(api).sort().join(", ")}`);
 
-      const api = instance.exports;
-      log("WASM ready");
-      log(`exports: ${Object.keys(api).sort().join(", ")}`);
-
-      const dataPtr = api.get_data_ptr();
-      log(`data ptr: ${dataPtr}`);
-
-      let err = api.init_screen(1200, 800);
-      log(`init_screen(1200, 800) => ${err}`);
-
-      err = api.move_handle(0, 650, 400);
-      log(`move_handle(0, 650, 400) before split => ${err}`);
-
-      err = api.set_area_content(0, 42);
-      log(`set_area_content(0, 42) => ${err}`);
-
-      err = api.move_corner(0, 2, 700, 500);
-      log(`move_corner(0, 2, 700, 500) split => ${err}`);
-
-      err = api.move_corner(0, 1, 720, 200);
-      log(`move_corner(0, 1, 720, 200) merge path => ${err}`);
-
-      err = api.move_handle(0, 400, 300);
-      log(`move_handle(0, 400, 300) => ${err}`);
-
-      err = api.set_handle_content(0, 777);
-      log(`set_handle_content(0, 777) => ${err}`);
-
-      const i32 = new Int32Array(memory.buffer, dataPtr, HEADER_I32 + (MAX_PANELS * AREA_I32) + (4 * HANDLE_I32));
-      const header = Array.from(i32.slice(0, HEADER_I32));
-      const area0 = Array.from(i32.slice(HEADER_I32, HEADER_I32 + AREA_I32));
-
-      const handleStart = HEADER_I32 + (MAX_PANELS * AREA_I32);
-      const handle0 = Array.from(i32.slice(handleStart, handleStart + HANDLE_I32));
-      const handle1 = Array.from(i32.slice(handleStart + HANDLE_I32, handleStart + HANDLE_I32 * 2));
-
-      log(`header[0..${HEADER_I32 - 1}]: ${header.join(", ")}`);
-      log(`area0[x0,y0,x1,y1,content]: ${area0.join(", ")}`);
-      log(`handle0[x0,y0,x1,y1,content]: ${handle0.join(", ")}`);
-      log(`handle1[x0,y0,x1,y1,content]: ${handle1.join(", ")}`);
+      callAndRender(`init_screen(${ui.w.value}, ${ui.h.value})`, () => api.init_screen(readInt(ui.w), readInt(ui.h)));
     }
 
+    ui.init.addEventListener("click", () => {
+      callAndRender(`init_screen(${ui.w.value}, ${ui.h.value})`, () => api.init_screen(readInt(ui.w), readInt(ui.h)));
+    });
+
+    ui.resize.addEventListener("click", () => {
+      callAndRender(`resize_screen(${ui.w.value}, ${ui.h.value})`, () => api.resize_screen(readInt(ui.w), readInt(ui.h)));
+    });
+
+    ui.setAreaContent.addEventListener("click", () => {
+      const idx = readInt(ui.areaIndex);
+      const content = readInt(ui.areaContent);
+      callAndRender(`set_area_content(${idx}, ${content})`, () => api.set_area_content(idx, content));
+    });
+
+    document.addEventListener("pointermove", (ev) => {
+      if (!dragState.active) return;
+      const local = toLocalStage(ev.clientX, ev.clientY);
+      dragState.x = local.x;
+      dragState.y = local.y;
+      ui.dragDot.style.left = `${local.x}px`;
+      ui.dragDot.style.top = `${local.y}px`;
+    });
+
+    document.addEventListener("pointerup", () => {
+      if (!dragState.active) return;
+      const x = dragState.x;
+      const y = dragState.y;
+      const area = dragState.areaIndex;
+      const corner = dragState.corner;
+      const handle = dragState.handleIndex;
+      const mode = dragState.mode;
+
+      dragState.active = false;
+      dragState.mode = "none";
+      ui.dragDot.style.display = "none";
+
+      if (mode === "corner") {
+        callAndRender(`move_corner(${area}, ${corner}, ${x}, ${y})`, () => api.move_corner(area, corner, x, y));
+      } else if (mode === "handle") {
+        callAndRender(`move_handle(${handle}, ${x}, ${y})`, () => api.move_handle(handle, x, y));
+      }
+    });
+
     boot().catch((err) => {
-      out.textContent = "";
-      log(`Boot failed: ${err.message}`);
+      ui.log.textContent = "";
+      log(`boot failed: ${err.message}`);
       console.error(err);
     });
   </script>

@@ -53,6 +53,9 @@ typedef struct {
 } LayoutData;
 
 static LayoutData g_data;
+static int32_t g_handle_axis[MAX_HANDLES];
+static int32_t g_handle_area_a[MAX_HANDLES];
+static int32_t g_handle_area_b[MAX_HANDLES];
 
 static int32_t is_valid_area_index(int32_t idx) {
   return idx >= 0 && idx < g_data.area_count;
@@ -70,6 +73,26 @@ static int32_t clamp_i32(int32_t v, int32_t lo, int32_t hi) {
     return hi;
   }
   return v;
+}
+
+static void clear_handle_link(int32_t handle_index) {
+  if (handle_index < 0 || handle_index >= MAX_HANDLES) {
+    return;
+  }
+  g_handle_axis[handle_index] = -1;
+  g_handle_area_a[handle_index] = -1;
+  g_handle_area_b[handle_index] = -1;
+}
+
+static int32_t handle_has_valid_link(int32_t handle_index) {
+  int32_t a;
+  int32_t b;
+  if (!is_valid_handle_index(handle_index)) {
+    return 0;
+  }
+  a = g_handle_area_a[handle_index];
+  b = g_handle_area_b[handle_index];
+  return is_valid_area_index(a) && is_valid_area_index(b);
 }
 
 static int32_t scale_coord(int32_t value, int32_t old_size, int32_t new_size) {
@@ -115,8 +138,41 @@ static void set_handle_center(int32_t handle_index, int32_t cx, int32_t cy) {
   h->y1 = clamp_i32(cy + HANDLE_HALF_SIZE, 0, g_data.screen_h);
 }
 
+static void set_handle_from_areas(int32_t handle_index) {
+  LayoutArea *a;
+  LayoutArea *b;
+  LayoutHandle *h;
+  int32_t axis;
+  if (!handle_has_valid_link(handle_index)) {
+    return;
+  }
+  a = &g_data.areas[g_handle_area_a[handle_index]];
+  b = &g_data.areas[g_handle_area_b[handle_index]];
+  h = &g_data.handles[handle_index];
+  axis = g_handle_axis[handle_index];
+
+  if (axis == 0) {
+    int32_t split = a->x1;
+    int32_t y0 = a->y0 < b->y0 ? a->y0 : b->y0;
+    int32_t y1 = a->y1 > b->y1 ? a->y1 : b->y1;
+    h->x0 = clamp_i32(split - HANDLE_HALF_SIZE, 0, g_data.screen_w);
+    h->x1 = clamp_i32(split + HANDLE_HALF_SIZE, 0, g_data.screen_w);
+    h->y0 = clamp_i32(y0, 0, g_data.screen_h);
+    h->y1 = clamp_i32(y1, 0, g_data.screen_h);
+  } else {
+    int32_t split = a->y1;
+    int32_t x0 = a->x0 < b->x0 ? a->x0 : b->x0;
+    int32_t x1 = a->x1 > b->x1 ? a->x1 : b->x1;
+    h->x0 = clamp_i32(x0, 0, g_data.screen_w);
+    h->x1 = clamp_i32(x1, 0, g_data.screen_w);
+    h->y0 = clamp_i32(split - HANDLE_HALF_SIZE, 0, g_data.screen_h);
+    h->y1 = clamp_i32(split + HANDLE_HALF_SIZE, 0, g_data.screen_h);
+  }
+}
+
 static int32_t add_split_handle(int32_t is_vertical, int32_t split_coord,
-                                const LayoutArea *before_split) {
+                                const LayoutArea *before_split,
+                                int32_t area_a_index, int32_t area_b_index) {
   LayoutHandle *h;
   int32_t idx;
   if (g_data.handle_count >= MAX_HANDLES) {
@@ -127,6 +183,9 @@ static int32_t add_split_handle(int32_t is_vertical, int32_t split_coord,
   g_data.handle_count += 1;
   h = &g_data.handles[idx];
   h->content_id = 0;
+  g_handle_axis[idx] = is_vertical ? 0 : 1;
+  g_handle_area_a[idx] = area_a_index;
+  g_handle_area_b[idx] = area_b_index;
 
   if (is_vertical) {
     h->x0 = clamp_i32(split_coord - HANDLE_HALF_SIZE, 0, g_data.screen_w);
@@ -198,6 +257,7 @@ __attribute__((export_name("init_screen"))) int32_t init_screen(int32_t w,
     g_data.handles[i].x1 = 0;
     g_data.handles[i].y1 = 0;
     g_data.handles[i].content_id = 0;
+    clear_handle_link(i);
   }
 
   set_ok(1, 0, w, h);
@@ -240,20 +300,24 @@ __attribute__((export_name("resize_screen"))) int32_t resize_screen(int32_t w,
   }
 
   for (i = 0; i < g_data.handle_count; ++i) {
-    LayoutHandle *hnd = &g_data.handles[i];
-    hnd->x0 = scale_coord(hnd->x0, old_w, w);
-    hnd->y0 = scale_coord(hnd->y0, old_h, h);
-    hnd->x1 = scale_coord(hnd->x1, old_w, w);
-    hnd->y1 = scale_coord(hnd->y1, old_h, h);
-    hnd->x0 = clamp_i32(hnd->x0, 0, w);
-    hnd->y0 = clamp_i32(hnd->y0, 0, h);
-    hnd->x1 = clamp_i32(hnd->x1, 0, w);
-    hnd->y1 = clamp_i32(hnd->y1, 0, h);
-    if (hnd->x1 <= hnd->x0) {
-      hnd->x1 = clamp_i32(hnd->x0 + 1, 1, w);
-    }
-    if (hnd->y1 <= hnd->y0) {
-      hnd->y1 = clamp_i32(hnd->y0 + 1, 1, h);
+    if (handle_has_valid_link(i)) {
+      set_handle_from_areas(i);
+    } else {
+      LayoutHandle *hnd = &g_data.handles[i];
+      hnd->x0 = scale_coord(hnd->x0, old_w, w);
+      hnd->y0 = scale_coord(hnd->y0, old_h, h);
+      hnd->x1 = scale_coord(hnd->x1, old_w, w);
+      hnd->y1 = scale_coord(hnd->y1, old_h, h);
+      hnd->x0 = clamp_i32(hnd->x0, 0, w);
+      hnd->y0 = clamp_i32(hnd->y0, 0, h);
+      hnd->x1 = clamp_i32(hnd->x1, 0, w);
+      hnd->y1 = clamp_i32(hnd->y1, 0, h);
+      if (hnd->x1 <= hnd->x0) {
+        hnd->x1 = clamp_i32(hnd->x0 + 1, 1, w);
+      }
+      if (hnd->y1 <= hnd->y0) {
+        hnd->y1 = clamp_i32(hnd->y0 + 1, 1, h);
+      }
     }
   }
 
@@ -263,6 +327,13 @@ __attribute__((export_name("resize_screen"))) int32_t resize_screen(int32_t w,
 
 __attribute__((export_name("move_handle"))) int32_t
 move_handle(int32_t handle_index, int32_t x, int32_t y) {
+  int32_t a_idx;
+  int32_t b_idx;
+  int32_t axis;
+  LayoutArea *a;
+  LayoutArea *b;
+  int32_t split;
+
   if (!g_data.initialized) {
     return reject(LAYOUT_ERR_NOT_INITIALIZED);
   }
@@ -273,7 +344,47 @@ move_handle(int32_t handle_index, int32_t x, int32_t y) {
     return reject(LAYOUT_ERR_OUT_OF_BOUNDS);
   }
 
-  set_handle_center(handle_index, x, y);
+  if (!handle_has_valid_link(handle_index)) {
+    set_handle_center(handle_index, x, y);
+    set_ok(2, handle_index, x, y);
+    return LAYOUT_OK;
+  }
+
+  a_idx = g_handle_area_a[handle_index];
+  b_idx = g_handle_area_b[handle_index];
+  axis = g_handle_axis[handle_index];
+  a = &g_data.areas[a_idx];
+  b = &g_data.areas[b_idx];
+
+  if (axis == 0) {
+    if (a->x1 != b->x0) {
+      return reject(LAYOUT_ERR_NOT_IMPLEMENTED);
+    }
+    if (a->y0 != b->y0 || a->y1 != b->y1) {
+      return reject(LAYOUT_ERR_NOT_IMPLEMENTED);
+    }
+    split = x;
+    if (split <= a->x0 + MIN_PANEL_SIZE || split >= b->x1 - MIN_PANEL_SIZE) {
+      return reject(LAYOUT_ERR_MIN_SIZE);
+    }
+    a->x1 = split;
+    b->x0 = split;
+  } else {
+    if (a->y1 != b->y0) {
+      return reject(LAYOUT_ERR_NOT_IMPLEMENTED);
+    }
+    if (a->x0 != b->x0 || a->x1 != b->x1) {
+      return reject(LAYOUT_ERR_NOT_IMPLEMENTED);
+    }
+    split = y;
+    if (split <= a->y0 + MIN_PANEL_SIZE || split >= b->y1 - MIN_PANEL_SIZE) {
+      return reject(LAYOUT_ERR_MIN_SIZE);
+    }
+    a->y1 = split;
+    b->y0 = split;
+  }
+
+  set_handle_from_areas(handle_index);
   set_ok(2, handle_index, x, y);
   return LAYOUT_OK;
 }
@@ -304,7 +415,7 @@ move_corner(int32_t area_index, int32_t corner_index, int32_t x, int32_t y) {
   source = g_data.areas[area_index];
 
   if (point_in_area_strict(&source, x, y)) {
-    if (g_data.area_count >= MAX_PANELS) {
+    if (g_data.area_count >= MAX_PANELS || g_data.handle_count >= MAX_HANDLES) {
       return reject(LAYOUT_ERR_CAPACITY);
     }
 
@@ -348,7 +459,8 @@ move_corner(int32_t area_index, int32_t corner_index, int32_t x, int32_t y) {
     }
 
     g_data.area_count += 1;
-    err = add_split_handle(is_vertical, split, &source);
+    err = add_split_handle(is_vertical, split, &source, area_index,
+                           g_data.area_count - 1);
     if (err != LAYOUT_OK) {
       return reject(err);
     }

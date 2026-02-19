@@ -118,10 +118,12 @@ async function run() {
 
   assertEq(api.move_handle(0, -1, 10), ERR.OUT_OF_BOUNDS, "negative x is invalid");
   assertEq(api.move_handle(0, 400, 300), ERR.OK, "valid handle move after split");
+  assertEq(area0[2], 400, "area0 x1 resized by handle move");
+  assertEq(area1[0], 400, "area1 x0 resized by handle move");
   assertEq(handle0[0], 396, "handle0 x0 after move");
-  assertEq(handle0[1], 296, "handle0 y0 after move");
+  assertEq(handle0[1], 0, "handle0 y0 spans full split range");
   assertEq(handle0[2], 404, "handle0 x1 after move");
-  assertEq(handle0[3], 304, "handle0 y1 after move");
+  assertEq(handle0[3], 600, "handle0 y1 spans full split range");
 
   assertEq(api.move_corner(123, 0, 50, 50), ERR.INVALID_AREA, "invalid area id");
   assertEq(api.move_corner(0, 9, 50, 50), ERR.INVALID_CORNER, "invalid corner index");
@@ -136,9 +138,9 @@ async function run() {
   assertEq(api.resize_screen(1200, 900), ERR.OK, "resize_screen succeeds");
   assertEq(header[1], 1200, "screen width after resize");
   assertEq(header[2], 900, "screen height after resize");
-  assertEq(area0[2], 1050, "area0 x1 scales on resize");
+  assertEq(area0[2], 600, "area0 x1 scales on resize");
   assertEq(area0[3], 900, "area0 y1 scales on resize");
-  assertEq(area1[0], 1050, "area1 x0 scales on resize");
+  assertEq(area1[0], 600, "area1 x0 scales on resize");
   assertEq(area1[2], 1200, "area1 x1 scales on resize");
 
   console.log("[test] all checks passed");
