@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -50,6 +51,7 @@
     }
   </style>
 </head>
+
 <body>
   <section class="panel">
     <h1>Layout WASM Mock Host</h1>
@@ -65,6 +67,11 @@
     }
 
     async function boot() {
+      const HEADER_I32 = 13;
+      const AREA_I32 = 5;
+      const HANDLE_I32 = 5;
+      const MAX_PANELS = 16;
+
       out.textContent = "";
       const response = await fetch("./layout.wasm");
       const wasmBytes = await response.arrayBuffer();
@@ -75,8 +82,8 @@
         shared: true
       });
 
-      const { instance } = await WebAssembly.instantiate(wasmBytes, {
-        env: { memory }
+      const {instance} = await WebAssembly.instantiate(wasmBytes, {
+        env: {memory}
       });
 
       const api = instance.exports;
@@ -89,14 +96,36 @@
       let err = api.init_screen(1200, 800);
       log(`init_screen(1200, 800) => ${err}`);
 
-      err = api.move_handle(1, 650, 400);
-      log(`move_handle(1, 650, 400) => ${err}`);
+      err = api.move_handle(0, 650, 400);
+      log(`move_handle(0, 650, 400) before split => ${err}`);
 
-      err = api.move_corner(0, 2, 1000, 700);
-      log(`move_corner(0, 2, 1000, 700) => ${err}`);
+      err = api.set_area_content(0, 42);
+      log(`set_area_content(0, 42) => ${err}`);
 
-      const i32 = new Int32Array(memory.buffer, dataPtr, 16);
-      log(`header[0..15]: ${Array.from(i32).join(", ")}`);
+      err = api.move_corner(0, 2, 700, 500);
+      log(`move_corner(0, 2, 700, 500) split => ${err}`);
+
+      err = api.move_corner(0, 1, 720, 200);
+      log(`move_corner(0, 1, 720, 200) merge path => ${err}`);
+
+      err = api.move_handle(0, 400, 300);
+      log(`move_handle(0, 400, 300) => ${err}`);
+
+      err = api.set_handle_content(0, 777);
+      log(`set_handle_content(0, 777) => ${err}`);
+
+      const i32 = new Int32Array(memory.buffer, dataPtr, HEADER_I32 + (MAX_PANELS * AREA_I32) + (4 * HANDLE_I32));
+      const header = Array.from(i32.slice(0, HEADER_I32));
+      const area0 = Array.from(i32.slice(HEADER_I32, HEADER_I32 + AREA_I32));
+
+      const handleStart = HEADER_I32 + (MAX_PANELS * AREA_I32);
+      const handle0 = Array.from(i32.slice(handleStart, handleStart + HANDLE_I32));
+      const handle1 = Array.from(i32.slice(handleStart + HANDLE_I32, handleStart + HANDLE_I32 * 2));
+
+      log(`header[0..${HEADER_I32 - 1}]: ${header.join(", ")}`);
+      log(`area0[x0,y0,x1,y1,content]: ${area0.join(", ")}`);
+      log(`handle0[x0,y0,x1,y1,content]: ${handle0.join(", ")}`);
+      log(`handle1[x0,y0,x1,y1,content]: ${handle1.join(", ")}`);
     }
 
     boot().catch((err) => {
@@ -106,4 +135,5 @@
     });
   </script>
 </body>
+
 </html>
