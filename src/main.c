@@ -79,6 +79,11 @@ static int32_t overlap_len(int32_t a0, int32_t a1, int32_t b0, int32_t b1) {
   return hi - lo;
 }
 
+/*
+ * BoundarySegment: a contiguous divider line at a given coordinate.
+ *   axis=0 (vertical):   coord=x position, a0..a1=y range
+ *   axis=1 (horizontal): coord=y position, a0..a1=x range
+ */
 typedef struct {
   int32_t coord;
   int32_t a0;
@@ -105,6 +110,12 @@ static void sort_segments(BoundarySegment *segs, int32_t count) {
   }
 }
 
+/*
+ * Collect all boundary segments for a given axis.
+ * Always merge touching or overlapping segments at the same coordinate.
+ * This produces full-length divider lines even when multiple area pairs
+ * contribute to the same logical divider (e.g. T-junctions, 3-col layouts).
+ */
 static int32_t collect_segments(int32_t axis, BoundarySegment *out,
                                 int32_t max_out) {
   int32_t i;
@@ -172,6 +183,7 @@ static int32_t collect_segments(int32_t axis, BoundarySegment *out,
 
     if (out[out_count - 1].coord == raw[i].coord &&
         raw[i].a0 <= out[out_count - 1].a1) {
+      /* touching or overlapping at same coord -> merge */
       if (raw[i].a1 > out[out_count - 1].a1) {
         out[out_count - 1].a1 = raw[i].a1;
       }
@@ -183,12 +195,20 @@ static int32_t collect_segments(int32_t axis, BoundarySegment *out,
   return out_count;
 }
 
+/*
+ * Match a handle to its corresponding boundary segment.
+ * Uses the handle's current span to find the segment that contains it
+ * (not just closest-midpoint). This keeps handles in a + layout independent
+ * even though segments at the same coord now merge freely.
+ */
 static int32_t update_handle_from_topology(int32_t handle_index) {
   int32_t axis;
   int32_t target_coord;
-  int32_t target_mid;
-  int32_t best_score = 0x7fffffff;
+  int32_t h_span0;
+  int32_t h_span1;
+  int32_t h_mid;
   int32_t best = -1;
+  int32_t best_score = 0x7fffffff;
   int32_t i;
   BoundarySegment segs[MAX_SEGMENTS];
   int32_t seg_count;
@@ -200,26 +220,61 @@ static int32_t update_handle_from_topology(int32_t handle_index) {
 
   h = &g_data.handles[handle_index];
   axis = (h->x1 - h->x0) <= (h->y1 - h->y0) ? 0 : 1;
-  target_coord = axis == 0 ? (h->x0 + h->x1) / 2 : (h->y0 + h->y1) / 2;
-  target_mid = axis == 0 ? (h->y0 + h->y1) / 2 : (h->x0 + h->x1) / 2;
+
+  if (axis == 0) {
+    target_coord = (h->x0 + h->x1) / 2;
+    h_span0 = h->y0;
+    h_span1 = h->y1;
+    h_mid = (h_span0 + h_span1) / 2;
+  } else {
+    target_coord = (h->y0 + h->y1) / 2;
+    h_span0 = h->x0;
+    h_span1 = h->x1;
+    h_mid = (h_span0 + h_span1) / 2;
+  }
 
   seg_count = collect_segments(axis, segs, MAX_SEGMENTS);
   if (seg_count <= 0) {
     return 0;
   }
 
+  /*
+   * Matching strategy:
+   * 1) Prefer segments at the exact same coord that overlap the handle span.
+   * 2) Among those, prefer the one whose span contains the handle midpoint.
+   * 3) Fall back to closest coord + closest midpoint if no overlap found.
+   */
   for (i = 0; i < seg_count; ++i) {
-    int32_t seg_mid = (segs[i].a0 + segs[i].a1) / 2;
     int32_t d_coord = segs[i].coord - target_coord;
-    int32_t d_mid = seg_mid - target_mid;
+    int32_t seg_contains_mid;
+    int32_t spans_overlap;
     int32_t score;
+
     if (d_coord < 0) {
       d_coord = -d_coord;
     }
-    if (d_mid < 0) {
-      d_mid = -d_mid;
+
+    seg_contains_mid = (h_mid >= segs[i].a0 && h_mid <= segs[i].a1);
+    spans_overlap = overlap_len(segs[i].a0, segs[i].a1, h_span0, h_span1) > 0;
+
+    /*
+     * Score: lower is better.
+     * - Exact coord match + contains midpoint: best possible
+     * - Exact coord match + span overlap: next best
+     * - Otherwise fall back to distance-based
+     */
+    if (d_coord == 0 && seg_contains_mid) {
+      score = 0;
+    } else if (d_coord == 0 && spans_overlap) {
+      score = 1;
+    } else {
+      int32_t d_mid = ((segs[i].a0 + segs[i].a1) / 2) - h_mid;
+      if (d_mid < 0) {
+        d_mid = -d_mid;
+      }
+      score = 2 + d_coord * 4096 + d_mid;
     }
-    score = d_coord * 2048 + d_mid;
+
     if (score < best_score) {
       best_score = score;
       best = i;

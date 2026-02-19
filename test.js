@@ -150,6 +150,97 @@ async function run() {
   assertEq(area1[0], Math.trunc(preResizeArea1X0 * 1200 / 800), "area1 x0 scales on resize");
   assertEq(area1[2], Math.trunc(preResizeArea1X1 * 1200 / 800), "area1 x1 scales on resize");
 
+  console.log("[test] basic checks passed");
+
+  /* ========================================================
+   * Regression: 3-column layout with horizontal splits
+   * ========================================================
+   *
+   * Layout:
+   *   col0 (0..300) | col1 (300..600) | col2 (600..900)
+   * Then split col0 horizontally at y=250, col1 at y=350.
+   *
+   * Expected: h0 (vertical, x=300) spans full 0..600 height
+   *           h1 (vertical, x=600) spans full 0..600 height
+   *           h2 (horizontal in col0) spans 0..300
+   *           h3 (horizontal in col1) spans 300..600
+   *           + and T-junction handles stay independent
+   */
+  assertEq(api.init_screen(900, 600), ERR.OK, "3col: init_screen");
+
+  function areaAtIndex(idx) {
+    const base = ABI.HEADER_I32 + idx * ABI.AREA_I32;
+    return new Int32Array(memory.buffer, dataPtr + base * 4, ABI.AREA_I32);
+  }
+
+  function handleAtIndex(idx) {
+    const base = ABI.HEADER_I32 + ABI.MAX_PANELS * ABI.AREA_I32 + idx * ABI.HANDLE_I32;
+    return new Int32Array(memory.buffer, dataPtr + base * 4, ABI.HANDLE_I32);
+  }
+
+  // Split into 2 columns: area0=[0,0,300,600] area1=[300,0,900,600]
+  assertEq(api.move_corner(0, 2, 300, 400), ERR.OK, "3col: first vertical split");
+  assertEq(header[5], 2, "3col: 2 areas after first split");
+
+  // Split into 3 columns: area1=[300,0,600,600] area2=[600,0,900,600]
+  assertEq(api.move_corner(1, 2, 600, 400), ERR.OK, "3col: second vertical split");
+  assertEq(header[5], 3, "3col: 3 areas after second split");
+  assertEq(header[6], 2, "3col: 2 handles (h0, h1) after 3 columns");
+
+  const h0 = handleAtIndex(0);
+  const h1 = handleAtIndex(1);
+
+  // h0 should be at x=300, full height
+  assertEq(h0[1], 0, "3col: h0 y0 = 0 (full height)");
+  assertEq(h0[3], 600, "3col: h0 y1 = 600 (full height)");
+
+  // h1 should be at x=600, full height
+  assertEq(h1[1], 0, "3col: h1 y0 = 0 (full height)");
+  assertEq(h1[3], 600, "3col: h1 y1 = 600 (full height)");
+
+  // Split col0 horizontally at y=250
+  assertEq(api.move_corner(0, 2, 150, 250), ERR.OK, "3col: split col0 horizontally");
+  assertEq(header[5], 4, "3col: 4 areas after col0 h-split");
+  assertEq(header[6], 3, "3col: 3 handles after col0 h-split");
+
+  // Split col1 horizontally at y=350
+  assertEq(api.move_corner(1, 2, 450, 350), ERR.OK, "3col: split col1 horizontally");
+  assertEq(header[5], 5, "3col: 5 areas after col1 h-split");
+  assertEq(header[6], 4, "3col: 4 handles after col1 h-split");
+
+  // h0 must STILL span full height (the key bug)
+  assertEq(h0[1], 0, "3col: h0 y0 still 0 after h-splits");
+  assertEq(h0[3], 600, "3col: h0 y1 still 600 after h-splits");
+
+  // h1 must STILL span full height
+  assertEq(h1[1], 0, "3col: h1 y0 still 0 after h-splits");
+  assertEq(h1[3], 600, "3col: h1 y1 still 600 after h-splits");
+
+  // h2 should be horizontal, spanning only col0 width
+  const h2 = handleAtIndex(2);
+  assertEq(h2[0], 0, "3col: h2 x0 = 0 (col0 left edge)");
+  assertEq(h2[2], 300, "3col: h2 x1 = 300 (col0 right edge)");
+
+  // h3 should be horizontal, spanning only col1 width
+  const h3 = handleAtIndex(3);
+  assertEq(h3[0], 300, "3col: h3 x0 = 300 (col1 left edge)");
+  assertEq(h3[2], 600, "3col: h3 x1 = 600 (col1 right edge)");
+
+  // Move h0 (full-height vertical) - should work
+  assertEq(api.move_handle(0, 350, 300), ERR.OK, "3col: move h0 to x=350");
+  // All areas on left of h0 should have x1=350, all on right x0=350
+  const a0 = areaAtIndex(0);
+  const a3 = areaAtIndex(3);
+  assertEq(a0[2], 350, "3col: area0 x1 after h0 move");
+  assertEq(a3[2], 350, "3col: area3 x1 after h0 move");
+
+  // Move h2 (horizontal in col0) - should still work independently
+  assertEq(api.move_handle(2, 175, 300), ERR.OK, "3col: move h2 to y=300");
+
+  // Move h3 (horizontal in col1) - should still work independently
+  assertEq(api.move_handle(3, 475, 400), ERR.OK, "3col: move h3 to y=400");
+
+  console.log("[test] 3-column regression passed");
   console.log("[test] all checks passed");
 }
 
