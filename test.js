@@ -137,7 +137,17 @@ async function run() {
   assertEq(api.move_corner(123, 0, 50, 50), ERR.INVALID_AREA, "invalid area id");
   assertEq(api.move_corner(0, 9, 50, 50), ERR.INVALID_CORNER, "invalid corner index");
   assertEq(api.move_corner(0, 0, 800, 600), ERR.OUT_OF_BOUNDS, "outside-target move returns out-of-bounds");
-  assertEq(api.move_corner(0, 1, 720, 200), ERR.NOT_IMPLEMENTED, "cross-area corner move triggers merge-not-implemented");
+
+  // area0=[0,0,400,600] area1=[400,0,800,600] — full shared edge → simple merge succeeds
+  assertEq(api.move_corner(0, 1, 720, 200), ERR.OK, "simple merge of full-edge neighbors succeeds");
+  assertEq(header[5], 1, "area count back to 1 after merge");
+  assertEq(header[6], 0, "handle count back to 0 after merge");
+  assertEq(area0[0], 0,   "merged area x0=0");
+  assertEq(area0[1], 0,   "merged area y0=0");
+  assertEq(area0[2], 800, "merged area x1=800");
+  assertEq(area0[3], 600, "merged area y1=600");
+  assertEq(area0[4], 42,  "merged area keeps survivor content_id");
+
   assertEq(api.set_area_content(9, 42), ERR.INVALID_AREA, "set_area_content invalid area");
 
   assertEq(api.move_corner(0, 2, 200, 300), ERR.OK, "second split inside area succeeds");
@@ -504,6 +514,118 @@ async function run() {
   assertEq(api.move_handle(2, 110, 250), ERR.OK, "vspan: h2 still movable");
 
   console.log("[test] vertical-handle-span-update regression passed");
+
+  /* ========================================================
+   * Simple merge tests
+   * ========================================================
+   *
+   * 1. Vertical merge: two side-by-side areas with full shared edge.
+   * 2. Horizontal merge: two stacked areas with full shared edge.
+   * 3. Partial-edge merge → NOT_IMPLEMENTED.
+   * 4. Merge in a 3-area layout: correct area/handle compaction.
+   * 5. Content-id: survivor (lower index) keeps its id.
+   * 6. Handles of remaining splits are unaffected after merge.
+   */
+
+  // ── 1. Vertical merge ──────────────────────────────────────────────
+  assertEq(api.init_screen(400, 300, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "merge-v: init");
+  assertEq(api.move_corner(0, 2, 200, 150), ERR.OK, "merge-v: split at x=200");
+  // area0=[0,0,200,300]  area1=[200,0,400,300]  h0=vertical@x=200
+  assertEq(header[5], 2, "merge-v: 2 areas before merge");
+  assertEq(header[6], 1, "merge-v: 1 handle before merge");
+
+  // drag corner of area1 into area0 → merge
+  assertEq(api.move_corner(1, 0, 50, 100), ERR.OK, "merge-v: merge area1 into area0");
+  assertEq(header[5], 1, "merge-v: 1 area after merge");
+  assertEq(header[6], 0, "merge-v: 0 handles after merge");
+  {
+    const ma = areaAtIndex(0);
+    assertEq(ma[0],   0, "merge-v: x0=0");
+    assertEq(ma[1],   0, "merge-v: y0=0");
+    assertEq(ma[2], 400, "merge-v: x1=400");
+    assertEq(ma[3], 300, "merge-v: y1=300");
+  }
+
+  // ── 2. Horizontal merge ────────────────────────────────────────────
+  assertEq(api.init_screen(400, 300, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "merge-h: init");
+  assertEq(api.move_corner(0, 2, 300, 150), ERR.OK, "merge-h: split at y=150");
+  // area0=[0,0,400,150]  area1=[0,150,400,300]  h0=horizontal@y=150
+  assertEq(header[5], 2, "merge-h: 2 areas before merge");
+
+  assertEq(api.move_corner(0, 2, 300, 200), ERR.OK, "merge-h: merge area0 into area1");
+  assertEq(header[5], 1, "merge-h: 1 area after merge");
+  assertEq(header[6], 0, "merge-h: 0 handles after merge");
+  {
+    const ma = areaAtIndex(0);
+    assertEq(ma[0],   0, "merge-h: x0=0");
+    assertEq(ma[1],   0, "merge-h: y0=0");
+    assertEq(ma[2], 400, "merge-h: x1=400");
+    assertEq(ma[3], 300, "merge-h: y1=300");
+  }
+
+  // ── 3. Partial-edge merge → NOT_IMPLEMENTED ────────────────────────
+  // Layout: 3 areas — left col full height, right col split top/bottom
+  //   area0=[0,0,200,300]  area1=[200,0,400,150]  area2=[200,150,400,300]
+  assertEq(api.init_screen(400, 300, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "merge-partial: init");
+  assertEq(api.move_corner(0, 2, 200, 200), ERR.OK, "merge-partial: v-split at x=200");
+  assertEq(api.move_corner(1, 2, 350, 150), ERR.OK, "merge-partial: h-split right col at y=150");
+  assertEq(header[5], 3, "merge-partial: 3 areas");
+
+  // area0=[0,0,200,300] vs area1=[200,0,400,150]: partial shared edge (y=0..150 vs y=0..300)
+  assertEq(api.move_corner(0, 1, 250, 50), ERR.NOT_IMPLEMENTED, "merge-partial: partial edge → NOT_IMPLEMENTED");
+  // State must be unchanged
+  assertEq(header[5], 3, "merge-partial: still 3 areas after failed merge");
+  assertEq(header[6], 2, "merge-partial: still 2 handles after failed merge");
+
+  // ── 4. Merge in 3-area layout: compaction and remaining handle ─────
+  // Layout: 3 vertical columns
+  //   area0=[0,0,150,300]  area1=[150,0,300,300]  area2=[300,0,400,300]
+  //   h0=vertical@x=150    h1=vertical@x=300
+  assertEq(api.init_screen(400, 300, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "merge-3col: init");
+  assertEq(api.move_corner(0, 2, 150, 200), ERR.OK, "merge-3col: first v-split at x=150");
+  assertEq(api.move_corner(1, 2, 300, 200), ERR.OK, "merge-3col: second v-split at x=300");
+  assertEq(header[5], 3, "merge-3col: 3 areas");
+  assertEq(header[6], 2, "merge-3col: 2 handles");
+
+  // Merge area0 + area1 (drag area1's TL corner into area0)
+  assertEq(api.move_corner(1, 0, 50, 100), ERR.OK, "merge-3col: merge area0+area1");
+  assertEq(header[5], 2, "merge-3col: 2 areas after merge");
+  assertEq(header[6], 1, "merge-3col: 1 handle after merge");
+
+  // Surviving area (index 0) should be [0,0,300,300]
+  {
+    const ma0 = areaAtIndex(0);
+    assertEq(ma0[0],   0, "merge-3col: survivor x0=0");
+    assertEq(ma0[2], 300, "merge-3col: survivor x1=300");
+  }
+  // Remaining area (was area2, now at index 1) should be [300,0,400,300]
+  {
+    const ma1 = areaAtIndex(1);
+    assertEq(ma1[0], 300, "merge-3col: remaining area x0=300");
+    assertEq(ma1[2], 400, "merge-3col: remaining area x1=400");
+  }
+  // Remaining handle should still be movable
+  assertEq(api.move_handle(0, 320, 150), ERR.OK, "merge-3col: remaining handle still movable");
+
+  // ── 5. Content-id: lower-index area survives ──────────────────────
+  assertEq(api.init_screen(400, 300, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "merge-cid: init");
+  assertEq(api.move_corner(0, 2, 200, 200), ERR.OK, "merge-cid: split");
+  assertEq(api.set_area_content(0, 11), ERR.OK, "merge-cid: set area0 content=11");
+  assertEq(api.set_area_content(1, 22), ERR.OK, "merge-cid: set area1 content=22");
+
+  // Drag area1's corner into area0 → area0 (lower index) survives with id=11
+  assertEq(api.move_corner(1, 0, 50, 100), ERR.OK, "merge-cid: merge");
+  assertEq(areaAtIndex(0)[4], 11, "merge-cid: survivor keeps lower-index content_id=11");
+
+  // Drag area0's corner into area1 → area0 (lower index) still survives with id=11
+  assertEq(api.init_screen(400, 300, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "merge-cid2: init");
+  assertEq(api.move_corner(0, 2, 200, 200), ERR.OK, "merge-cid2: split");
+  assertEq(api.set_area_content(0, 11), ERR.OK, "merge-cid2: set area0 content=11");
+  assertEq(api.set_area_content(1, 22), ERR.OK, "merge-cid2: set area1 content=22");
+  assertEq(api.move_corner(0, 2, 350, 200), ERR.OK, "merge-cid2: merge area0 into area1");
+  assertEq(areaAtIndex(0)[4], 11, "merge-cid2: survivor still lower-index content_id=11");
+
+  console.log("[test] simple merge passed");
   console.log("[test] all checks passed");
 }
 

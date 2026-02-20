@@ -429,6 +429,145 @@ static layout_i32 point_in_area(layout_i32 ai, layout_i32 px, layout_i32 py) {
     return (px >= a->x0 && px < a->x1 && py >= a->y0 && py < a->y1);
 }
 
+/*
+ * Remove area at index [dead] by shifting everything above it down.
+ * Updates area_count.
+ */
+static void remove_area(layout_i32 dead) {
+    for (layout_i32 i = dead; i < g_info.area_count - 1; i++) {
+        g_info.areas[i] = g_info.areas[i + 1];
+    }
+    g_info.area_count--;
+}
+
+/*
+ * Remove handle at index [dead] by shifting everything above it down.
+ * Also shifts the parallel metadata arrays.
+ * Updates handle_count.
+ */
+static void remove_handle(layout_i32 dead) {
+    for (layout_i32 i = dead; i < g_info.handle_count - 1; i++) {
+        g_info.handles[i]      = g_info.handles[i + 1];
+        g_handle_axis[i]       = g_handle_axis[i + 1];
+        g_handle_col_x0[i]     = g_handle_col_x0[i + 1];
+        g_handle_col_x1[i]     = g_handle_col_x1[i + 1];
+    }
+    g_info.handle_count--;
+}
+
+/*
+ * Try a simple merge of area [src_idx] into area [tgt_idx].
+ *
+ * "Simple" means the two areas share a complete edge — their shared
+ * boundary spans the full extent of both areas on the perpendicular
+ * axis.  No other area needs to be split or resized.
+ *
+ * Vertical boundary (src to the left of tgt, or vice versa):
+ *   src.x1 == tgt.x0  (or tgt.x1 == src.x0)
+ *   src.y0 == tgt.y0  AND  src.y1 == tgt.y1
+ *
+ * Horizontal boundary (src above tgt, or vice versa):
+ *   src.y1 == tgt.y0  (or tgt.y1 == src.y0)
+ *   src.x0 == tgt.x0  AND  src.x1 == tgt.x1
+ *
+ * Returns LAYOUT_OK on success (state mutated).
+ * Returns LAYOUT_ERR_NOT_IMPLEMENTED if the pair is not simply-mergeable.
+ */
+static layout_i32 try_simple_merge(layout_i32 src_idx, layout_i32 tgt_idx) {
+    LayoutArea *src = &g_info.areas[src_idx];
+    LayoutArea *tgt = &g_info.areas[tgt_idx];
+
+    layout_i32 boundary_axis = -1;
+    layout_i32 boundary_val  = -1;
+    /* left = the area whose right edge is the boundary */
+    layout_i32 left_idx = -1, right_idx = -1;
+    /* top  = the area whose bottom edge is the boundary */
+    layout_i32 top_idx  = -1, bot_idx   = -1;
+
+    /* Check vertical shared edge. */
+    if (src->x1 == tgt->x0 && src->y0 == tgt->y0 && src->y1 == tgt->y1) {
+        boundary_axis = AXIS_VERTICAL;
+        boundary_val  = src->x1;
+        left_idx = src_idx; right_idx = tgt_idx;
+    } else if (tgt->x1 == src->x0 && tgt->y0 == src->y0 && tgt->y1 == src->y1) {
+        boundary_axis = AXIS_VERTICAL;
+        boundary_val  = tgt->x1;
+        left_idx = tgt_idx; right_idx = src_idx;
+    }
+    /* Check horizontal shared edge. */
+    else if (src->y1 == tgt->y0 && src->x0 == tgt->x0 && src->x1 == tgt->x1) {
+        boundary_axis = AXIS_HORIZONTAL;
+        boundary_val  = src->y1;
+        top_idx = src_idx; bot_idx = tgt_idx;
+    } else if (tgt->y1 == src->y0 && tgt->x0 == src->x0 && tgt->x1 == src->x1) {
+        boundary_axis = AXIS_HORIZONTAL;
+        boundary_val  = tgt->y1;
+        top_idx = tgt_idx; bot_idx = src_idx;
+    }
+
+    if (boundary_axis == -1) {
+        /* Not simply-mergeable. */
+        return LAYOUT_ERR_NOT_IMPLEMENTED;
+    }
+
+    /*
+     * Find the handle that sits on this boundary.
+     * For a vertical boundary at x=V: handle is AXIS_VERTICAL with midpoint x==V.
+     * For a horizontal boundary at y=V: handle is AXIS_HORIZONTAL with midpoint y==V
+     *   AND its column contains both areas.
+     */
+    layout_i32 hnd_idx = -1;
+    for (layout_i32 i = 0; i < g_info.handle_count; i++) {
+        if (g_handle_axis[i] == boundary_axis) {
+            if (boundary_axis == AXIS_VERTICAL) {
+                layout_i32 bx = (g_info.handles[i].x0 + g_info.handles[i].x1) / 2;
+                if (bx == boundary_val) { hnd_idx = i; break; }
+            } else {
+                layout_i32 by = (g_info.handles[i].y0 + g_info.handles[i].y1) / 2;
+                if (by == boundary_val) { hnd_idx = i; break; }
+            }
+        }
+    }
+    /* No matching handle is a logic error, but treat gracefully. */
+    if (hnd_idx == -1) {
+        return LAYOUT_ERR_NOT_IMPLEMENTED;
+    }
+
+    /*
+     * Perform the merge.
+     * Lower index survives; it absorbs the other area's extent.
+     * Surviving area keeps its own content_id (spec: "surviving area keeps its ID").
+     */
+    layout_i32 survivor, dead;
+    if (boundary_axis == AXIS_VERTICAL) {
+        survivor = left_idx < right_idx ? left_idx : right_idx;
+        dead     = left_idx < right_idx ? right_idx : left_idx;
+        /* Expand survivor to cover both. */
+        g_info.areas[survivor].x0 = g_info.areas[left_idx].x0;
+        g_info.areas[survivor].y0 = g_info.areas[left_idx].y0;
+        g_info.areas[survivor].x1 = g_info.areas[right_idx].x1;
+        g_info.areas[survivor].y1 = g_info.areas[right_idx].y1;
+    } else {
+        survivor = top_idx < bot_idx ? top_idx : bot_idx;
+        dead     = top_idx < bot_idx ? bot_idx : top_idx;
+        g_info.areas[survivor].x0 = g_info.areas[top_idx].x0;
+        g_info.areas[survivor].y0 = g_info.areas[top_idx].y0;
+        g_info.areas[survivor].x1 = g_info.areas[bot_idx].x1;
+        g_info.areas[survivor].y1 = g_info.areas[bot_idx].y1;
+    }
+
+    /* Remove the dead area and the shared handle. */
+    remove_area(dead);
+    remove_handle(hnd_idx);
+
+    /* Recompute all remaining handle rects (spans may have changed). */
+    for (layout_i32 i = 0; i < g_info.handle_count; i++) {
+        recompute_handle_rect_scoped(i);
+    }
+
+    return LAYOUT_OK;
+}
+
 LAYOUT_EXPORT("move_corner")
 layout_i32 move_corner(layout_i32 area_index, layout_i32 corner_index,
                         layout_i32 x, layout_i32 y) {
@@ -454,20 +593,23 @@ layout_i32 move_corner(layout_i32 area_index, layout_i32 corner_index,
     /* Check if target is inside the source area. */
     if (!point_in_area(area_index, x, y)) {
         /*
-         * Target is outside the source area.
-         * Check if it's inside any other area → merge (not implemented).
-         * Otherwise it's out of bounds (shouldn't happen given screen check above,
-         * but handle gracefully).
+         * Target is outside the source area — attempt a merge.
+         * Find which area the drag landed in.
          */
+        layout_i32 tgt_idx = -1;
         for (layout_i32 i = 0; i < g_info.area_count; i++) {
             if (i == area_index) continue;
-            if (point_in_area(i, x, y)) {
-                set_error(LAYOUT_ERR_NOT_IMPLEMENTED);
-                return LAYOUT_ERR_NOT_IMPLEMENTED;
-            }
+            if (point_in_area(i, x, y)) { tgt_idx = i; break; }
         }
-        set_error(LAYOUT_ERR_OUT_OF_BOUNDS);
-        return LAYOUT_ERR_OUT_OF_BOUNDS;
+        if (tgt_idx == -1) {
+            set_error(LAYOUT_ERR_OUT_OF_BOUNDS);
+            return LAYOUT_ERR_OUT_OF_BOUNDS;
+        }
+
+        layout_i32 err = try_simple_merge(area_index, tgt_idx);
+        set_error(err);
+        if (err == LAYOUT_OK) bump_generation();
+        return err;
     }
 
     /* ── Split ── */
