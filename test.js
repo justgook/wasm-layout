@@ -382,6 +382,128 @@ async function run() {
   assertEq(bh0[3], 400, "aligned2: h0 y1 still 400 after post-align moves");
 
   console.log("[test] aligned-handles regression passed");
+
+  /* ========================================================
+   * Regression: moving a horizontal handle must update the
+   * y-spans of perpendicular (vertical) handles that share
+   * the same boundary row.
+   * ========================================================
+   *
+   * Layout after 4 ops on 400x400:
+   *
+   *   move_corner(0, 0, 127, 128)  → h-split at y=128 (full width)
+   *   move_corner(0, 1, 232,   9)  → v-split at x=232 (top row only, y=0..128)
+   *   move_corner(1, 3, 130, 289)  → v-split at x=130 (bottom row only, y=128..400)
+   *
+   *   area0=[0,0,232,128]   area2=[232,0,400,128]
+   *   area1=[0,128,130,400] area3=[130,128,400,400]
+   *
+   *   h0 = horizontal at y=128, x=0..400
+   *   h1 = vertical   at x=232, y=0..128
+   *   h2 = vertical   at x=130, y=128..400
+   *
+   * Moving h0 up 10px (y=118) must:
+   *   - shrink h1's y-span: 0..128 → 0..118  (top boundary moves up)
+   *   - grow   h2's y-span: 128..400 → 118..400 (top boundary moves up)
+   */
+  assertEq(api.init_screen(400, 400, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "hspan: init");
+  assertEq(api.move_corner(0, 0, 127, 128), ERR.OK, "hspan: h-split at y=128");
+  assertEq(api.move_corner(0, 1, 232,   9), ERR.OK, "hspan: v-split top at x=232");
+  assertEq(api.move_corner(1, 3, 130, 289), ERR.OK, "hspan: v-split bottom at x=130");
+
+  assertEq(header[5], 4, "hspan: 4 areas");
+  assertEq(header[6], 3, "hspan: 3 handles");
+
+  const rh0 = handleAtIndex(0); // horizontal at y=128
+  const rh1 = handleAtIndex(1); // vertical   at x=232, y=0..128
+  const rh2 = handleAtIndex(2); // vertical   at x=130, y=128..400
+
+  // Verify initial spans
+  assertEq(rh1[1],   0, "hspan: h1 y0 initially 0");
+  assertEq(rh1[3], 128, "hspan: h1 y1 initially 128");
+  assertEq(rh2[1], 128, "hspan: h2 y0 initially 128");
+  assertEq(rh2[3], 400, "hspan: h2 y1 initially 400");
+
+  // Move h0 up 10px
+  assertEq(api.move_handle(0, 200, 118), ERR.OK, "hspan: move h0 to y=118");
+
+  // h1 must shrink (top row got shorter)
+  assertEq(rh1[1],   0, "hspan: h1 y0 still 0 after h0 move");
+  assertEq(rh1[3], 118, "hspan: h1 y1 updated to 118 after h0 move");
+
+  // h2 must grow (bottom row got taller)
+  assertEq(rh2[1], 118, "hspan: h2 y0 updated to 118 after h0 move");
+  assertEq(rh2[3], 400, "hspan: h2 y1 still 400 after h0 move");
+
+  // Move h0 back down 20px (y=138) — spans must follow
+  assertEq(api.move_handle(0, 200, 138), ERR.OK, "hspan: move h0 to y=138");
+  assertEq(rh1[3], 138, "hspan: h1 y1 updated to 138");
+  assertEq(rh2[1], 138, "hspan: h2 y0 updated to 138");
+
+  console.log("[test] handle-span-update regression passed");
+
+  /* ========================================================
+   * Regression: moving a vertical handle must update the
+   * x-spans of perpendicular (horizontal) handles whose
+   * column wall was that vertical boundary.
+   * ========================================================
+   *
+   * Layout after 3 ops on 400x400:
+   *
+   *   move_corner(0, 0, 181,  65) → v-split at x=181 (full height)
+   *   move_corner(1, 1, 277, 258) → h-split at y=258 (right col, x=181..400)
+   *   move_corner(0, 0,  84, 192) → h-split at y=192 (left col,  x=0..181)
+   *
+   *   area0=[0,0,181,192]   area1=[181,0,400,258]
+   *   area3=[0,192,181,400] area2=[181,258,400,400]
+   *
+   *   h0 = vertical   at x=181, y=0..400
+   *   h1 = horizontal at y=258, x=181..400  (col_x0=181, col_x1=400)
+   *   h2 = horizontal at y=192, x=0..181    (col_x0=0,   col_x1=181)
+   *
+   * Moving h0 left to x=129 must:
+   *   - shrink h1's x-span: 181..400 → 129..400  (left wall moved left)
+   *   - shrink h2's x-span: 0..181   → 0..129    (right wall moved left)
+   */
+  assertEq(api.init_screen(400, 400, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "vspan: init");
+  assertEq(api.move_corner(0, 0, 181,  65), ERR.OK, "vspan: v-split at x=181");
+  assertEq(api.move_corner(1, 1, 277, 258), ERR.OK, "vspan: h-split right col at y=258");
+  assertEq(api.move_corner(0, 0,  84, 192), ERR.OK, "vspan: h-split left col at y=192");
+
+  assertEq(header[5], 4, "vspan: 4 areas");
+  assertEq(header[6], 3, "vspan: 3 handles");
+
+  const vh0 = handleAtIndex(0); // vertical   at x=181
+  const vh1 = handleAtIndex(1); // horizontal at y=258, x=181..400
+  const vh2 = handleAtIndex(2); // horizontal at y=192, x=0..181
+
+  // Verify initial spans
+  assertEq(vh1[0], 181, "vspan: h1 x0 initially 181");
+  assertEq(vh1[2], 400, "vspan: h1 x1 initially 400");
+  assertEq(vh2[0],   0, "vspan: h2 x0 initially 0");
+  assertEq(vh2[2], 181, "vspan: h2 x1 initially 181");
+
+  // Move h0 left to x=129
+  assertEq(api.move_handle(0, 129, 112), ERR.OK, "vspan: move h0 to x=129");
+
+  // h1 left wall must follow (col_x0 was 181, now 129)
+  assertEq(vh1[0], 129, "vspan: h1 x0 updated to 129 after h0 move");
+  assertEq(vh1[2], 400, "vspan: h1 x1 still 400");
+
+  // h2 right wall must follow (col_x1 was 181, now 129)
+  assertEq(vh2[0],   0, "vspan: h2 x0 still 0");
+  assertEq(vh2[2], 129, "vspan: h2 x1 updated to 129 after h0 move");
+
+  // Move h0 right to x=220 — spans must follow again
+  assertEq(api.move_handle(0, 220, 112), ERR.OK, "vspan: move h0 to x=220");
+  assertEq(vh1[0], 220, "vspan: h1 x0 updated to 220");
+  assertEq(vh2[2], 220, "vspan: h2 x1 updated to 220");
+
+  // h1 and h2 must still be independently movable
+  assertEq(api.move_handle(1, 310, 300), ERR.OK, "vspan: h1 still movable");
+  assertEq(api.move_handle(2, 110, 250), ERR.OK, "vspan: h2 still movable");
+
+  console.log("[test] vertical-handle-span-update regression passed");
   console.log("[test] all checks passed");
 }
 
