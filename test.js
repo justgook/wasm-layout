@@ -15,11 +15,14 @@ const ERR = {
 };
 
 const ABI = {
-  HEADER_I32: 13,
+  HEADER_I32: 15,
   AREA_I32: 5,
   HANDLE_I32: 5,
   MAX_PANELS: 16,
 };
+
+const HANDLE_SIZE = 4;
+const MIN_PANEL_SIZE = 16;
 
 function assertEq(actual, expected, message) {
   if (actual !== expected) {
@@ -58,12 +61,14 @@ async function run() {
   assertEq(api.move_handle(0, 10, 10), ERR.NOT_INITIALIZED, "move_handle before init must fail");
   assertEq(api.move_corner(0, 0, 10, 10), ERR.NOT_INITIALIZED, "move_corner before init must fail");
 
-  assertEq(api.init_screen(0, 300), ERR.INVALID_ARG, "init_screen width=0 must fail");
-  assertEq(api.init_screen(800, 600), ERR.OK, "init_screen must succeed");
+  assertEq(api.init_screen(0, 300, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.INVALID_ARG, "init_screen width=0 must fail");
+  assertEq(api.init_screen(800, 600, 0, MIN_PANEL_SIZE), ERR.INVALID_ARG, "init_screen handle_size=0 must fail");
+  assertEq(api.init_screen(800, 600, HANDLE_SIZE, 0), ERR.INVALID_ARG, "init_screen min_panel_size=0 must fail");
+  assertEq(api.init_screen(800, 600, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "init_screen must succeed");
 
-  const dataPtr = api.get_data_ptr();
+  const dataPtr = api.get_info_ptr();
   if (!dataPtr) {
-    throw new Error("get_data_ptr returned null");
+    throw new Error("get_info_ptr returned null");
   }
 
   const header = new Int32Array(memory.buffer, dataPtr, ABI.HEADER_I32);
@@ -75,14 +80,18 @@ async function run() {
   const areaCount = header[5];
   const handleCount = header[6];
   const generationAfterInit = header[8];
+  const handleHalfSize = header[13];
+  const minPanelSize = header[14];
 
   assertEq(initialized, 1, "initialized flag");
   assertEq(screenW, 800, "screen width");
   assertEq(screenH, 600, "screen height");
   assertEq(maxPanels, 16, "max panels constant");
-  assertEq(maxHandles, 64, "max handles constant");
+  assertEq(maxHandles, ABI.MAX_PANELS - 1, "max handles constant");
   assertEq(areaCount, 1, "area count after init");
   assertEq(handleCount, 0, "handle count after init");
+  assertEq(handleHalfSize, 4, "handle half size after init");
+  assertEq(minPanelSize, MIN_PANEL_SIZE, "min panel size after init");
 
   const area0Start = ABI.HEADER_I32;
   const area0 = new Int32Array(memory.buffer, dataPtr + area0Start * 4, ABI.AREA_I32);
@@ -142,7 +151,7 @@ async function run() {
   const preResizeArea0Y1 = area0[3];
   const preResizeArea1X0 = area1[0];
   const preResizeArea1X1 = area1[2];
-  assertEq(api.resize_screen(1200, 900), ERR.OK, "resize_screen succeeds");
+  assertEq(api.resize_screen(1200, 900, HANDLE_SIZE), ERR.OK, "resize_screen succeeds");
   assertEq(header[1], 1200, "screen width after resize");
   assertEq(header[2], 900, "screen height after resize");
   assertEq(area0[2], Math.trunc(preResizeArea0X1 * 1200 / 800), "area0 x1 scales on resize");
@@ -166,7 +175,7 @@ async function run() {
    *           h3 (horizontal in col1) spans 300..600
    *           + and T-junction handles stay independent
    */
-  assertEq(api.init_screen(900, 600), ERR.OK, "3col: init_screen");
+  assertEq(api.init_screen(900, 600, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "3col: init_screen");
 
   function areaAtIndex(idx) {
     const base = ABI.HEADER_I32 + idx * ABI.AREA_I32;
@@ -250,7 +259,7 @@ async function run() {
    * split right at y=164. Then move left h-handle toward y=164.
    * Handles must stay independent.
    */
-  assertEq(api.init_screen(400, 400), ERR.OK, "sticky: init_screen");
+  assertEq(api.init_screen(400, 400, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "sticky: init_screen");
   assertEq(api.move_corner(0, 1, 185, 40), ERR.OK, "sticky: vertical split");
   assertEq(api.move_corner(0, 0, 7, 116), ERR.OK, "sticky: left h-split");
   assertEq(api.move_corner(1, 1, 392, 164), ERR.OK, "sticky: right h-split");
@@ -302,7 +311,7 @@ async function run() {
    * After aligning h2 to y=241 (or h1 to y=172), the vertical
    * handle h0 at x=182 must still go 0..400.
    */
-  assertEq(api.init_screen(400, 400), ERR.OK, "aligned: init_screen");
+  assertEq(api.init_screen(400, 400, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "aligned: init_screen");
 
   // Vertical split at x=182
   assertEq(api.move_corner(0, 0, 182, 114), ERR.OK, "aligned: vertical split");
@@ -342,7 +351,7 @@ async function run() {
 
   // Also test alignment in the other direction: move h2 to y=172 back
   // Reset with same layout
-  assertEq(api.init_screen(400, 400), ERR.OK, "aligned2: init_screen");
+  assertEq(api.init_screen(400, 400, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "aligned2: init_screen");
   assertEq(api.move_corner(0, 0, 182, 114), ERR.OK, "aligned2: vertical split");
   assertEq(api.move_corner(0, 0, 50, 241), ERR.OK, "aligned2: h-split left col");
   assertEq(api.move_corner(1, 1, 281, 172), ERR.OK, "aligned2: h-split right col");

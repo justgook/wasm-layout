@@ -70,6 +70,10 @@
       gap: 8px;
     }
 
+    .row.three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
     label {
       font-size: 12px;
       display: flex;
@@ -267,12 +271,20 @@
     <aside class="sidebar">
       <h1 class="title">Layout WASM Playground</h1>
 
-      <div class="row">
+      <div class="row three">
         <label>Width
           <input id="w" type="number" value="900" min="64">
         </label>
         <label>Height
           <input id="h" type="number" value="620" min="64">
+        </label>
+        <label>Handle Size
+          <input id="handle-size" type="number" value="4" min="1">
+        </label>
+      </div>
+      <div class="row">
+        <label>Min Panel Size
+          <input id="min-panel-size" type="number" value="16" min="1">
         </label>
       </div>
 
@@ -305,7 +317,7 @@
 
   <script type="module">
     const ABI = {
-      HEADER_I32: 13,
+      HEADER_I32: 15,
       AREA_I32: 5,
       HANDLE_I32: 5,
       MAX_PANELS: 16,
@@ -327,6 +339,8 @@
     const ui = {
       w: document.getElementById("w"),
       h: document.getElementById("h"),
+      handleSize: document.getElementById("handle-size"),
+      minPanelSize: document.getElementById("min-panel-size"),
       init: document.getElementById("init"),
       resize: document.getElementById("resize"),
       areaIndex: document.getElementById("area-index"),
@@ -435,6 +449,8 @@
         lastIndex: v[10],
         lastX: v[11],
         lastY: v[12],
+        handleHalfSize: v[13],
+        minPanelSize: v[14],
       };
     }
 
@@ -541,6 +557,8 @@
         `last_action: ${h.lastAction}`,
         `last_index: ${h.lastIndex}`,
         `last_xy: ${h.lastX}, ${h.lastY}`,
+        `handle_half_size: ${h.handleHalfSize}`,
+        `min_panel_size: ${h.minPanelSize}`,
       ].join("\n");
     }
 
@@ -566,19 +584,19 @@
 
       const {instance} = await WebAssembly.instantiate(wasmBytes, {env: {memory}});
       api = instance.exports;
-      dataPtr = api.get_data_ptr();
+      dataPtr = api.get_info_ptr();
       ui.log.textContent = "";
       log(`wasm ready; exports: ${Object.keys(api).sort().join(", ")}`);
 
-      callAndRender(`init_screen(${ui.w.value}, ${ui.h.value})`, () => api.init_screen(readInt(ui.w), readInt(ui.h)));
+      callAndRender(`init_screen(${ui.w.value}, ${ui.h.value}, ${ui.handleSize.value}, ${ui.minPanelSize.value})`, () => api.init_screen(readInt(ui.w), readInt(ui.h), readInt(ui.handleSize), readInt(ui.minPanelSize)));
     }
 
     ui.init.addEventListener("click", () => {
-      callAndRender(`init_screen(${ui.w.value}, ${ui.h.value})`, () => api.init_screen(readInt(ui.w), readInt(ui.h)));
+      callAndRender(`init_screen(${ui.w.value}, ${ui.h.value}, ${ui.handleSize.value}, ${ui.minPanelSize.value})`, () => api.init_screen(readInt(ui.w), readInt(ui.h), readInt(ui.handleSize), readInt(ui.minPanelSize)));
     });
 
     ui.resize.addEventListener("click", () => {
-      callAndRender(`resize_screen(${ui.w.value}, ${ui.h.value})`, () => api.resize_screen(readInt(ui.w), readInt(ui.h)));
+      callAndRender(`resize_screen(${ui.w.value}, ${ui.h.value}, ${ui.handleSize.value})`, () => api.resize_screen(readInt(ui.w), readInt(ui.h), readInt(ui.handleSize)));
     });
 
     ui.setAreaContent.addEventListener("click", () => {
