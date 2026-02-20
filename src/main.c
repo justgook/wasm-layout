@@ -534,6 +534,37 @@ static layout_i32 try_simple_merge(layout_i32 src_idx, layout_i32 tgt_idx) {
     }
 
     /*
+     * Guard: the handle's span must match exactly the merging areas' extent.
+     *
+     * A vertical handle at x=V may span more than just the two merging
+     * areas if other areas also border x=V (e.g. a "+" layout where the
+     * vertical boundary continues into a row below).  Removing the handle
+     * in that case would leave those other areas with no handle between
+     * them — a broken state.
+     *
+     * The handle's current span (from recompute_handle_rect_scoped) reflects
+     * all areas touching the boundary, so we just compare it to the merging
+     * areas' extent.
+     */
+    if (boundary_axis == AXIS_VERTICAL) {
+        /* Merging areas share y0..y1; handle must span exactly that range. */
+        layout_i32 shared_y0 = g_info.areas[left_idx].y0;
+        layout_i32 shared_y1 = g_info.areas[left_idx].y1;
+        if (g_info.handles[hnd_idx].y0 != shared_y0 ||
+            g_info.handles[hnd_idx].y1 != shared_y1) {
+            return LAYOUT_ERR_NOT_IMPLEMENTED;
+        }
+    } else {
+        /* Merging areas share x0..x1; handle must span exactly that range. */
+        layout_i32 shared_x0 = g_info.areas[top_idx].x0;
+        layout_i32 shared_x1 = g_info.areas[top_idx].x1;
+        if (g_info.handles[hnd_idx].x0 != shared_x0 ||
+            g_info.handles[hnd_idx].x1 != shared_x1) {
+            return LAYOUT_ERR_NOT_IMPLEMENTED;
+        }
+    }
+
+    /*
      * Perform the merge.
      * Lower index survives; it absorbs the other area's extent.
      * Surviving area keeps its own content_id (spec: "surviving area keeps its ID").

@@ -625,6 +625,36 @@ async function run() {
   assertEq(api.move_corner(0, 2, 350, 200), ERR.OK, "merge-cid2: merge area0 into area1");
   assertEq(areaAtIndex(0)[4], 11, "merge-cid2: survivor still lower-index content_id=11");
 
+  // ── 6. Shared-boundary guard: "+" layout merge must be blocked ────
+  // Build a "+" layout: vertical split at x=194, then h-split both cols
+  // at the same y=148, creating 4 areas sharing h0 (vertical@x=194).
+  //
+  //   area0=[0,0,194,148]   area1=[194,0,400,148]
+  //   area2=[0,148,194,400] area3=[194,148,400,400]
+  //   h0=vertical@x=194 spans y=0..400  (shared by all 4 areas)
+  //   h1=horizontal@y=148 left col
+  //   h2=horizontal@y=148 right col
+  //
+  // Merging area1 (top-right) into area0 (top-left) would remove h0,
+  // but h0 also separates area2/area3 → must be blocked.
+  assertEq(api.init_screen(400, 400, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK,  "merge-guard: init");
+  assertEq(api.move_corner(0, 1, 194, 8),    ERR.OK, "merge-guard: v-split x=194");
+  assertEq(api.move_corner(0, 0, 3,   148),  ERR.OK, "merge-guard: h-split left  y=148");
+  assertEq(api.move_corner(1, 0, 203, 148),  ERR.OK, "merge-guard: h-split right y=148");
+  assertEq(header[5], 4, "merge-guard: 4 areas");
+  assertEq(header[6], 3, "merge-guard: 3 handles");
+
+  // Attempt cross-boundary merge (top-left ↔ top-right): h0 is shared → blocked
+  assertEq(api.move_corner(1, 0, 100, 80), ERR.NOT_IMPLEMENTED, "merge-guard: cross shared boundary → NOT_IMPLEMENTED");
+  assertEq(header[5], 4, "merge-guard: still 4 areas after blocked merge");
+  assertEq(header[6], 3, "merge-guard: still 3 handles after blocked merge");
+
+  // Merging within the same column (top-left ↔ bottom-left) IS safe:
+  // h1 (horizontal@y=148, x=0..194) spans only area0+area2 → handle not shared
+  assertEq(api.move_corner(0, 2, 50, 200), ERR.OK, "merge-guard: same-col merge succeeds");
+  assertEq(header[5], 3, "merge-guard: 3 areas after in-col merge");
+  assertEq(header[6], 2, "merge-guard: 2 handles after in-col merge");
+
   console.log("[test] simple merge passed");
   console.log("[test] all checks passed");
 }
