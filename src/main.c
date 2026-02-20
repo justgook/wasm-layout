@@ -1,9 +1,11 @@
+#include "./layout.h"
 #include <stdint.h>
 
 #define MAX_PANELS 16
-#define MAX_HANDLES (MAX_PANELS * 4)
 #define MIN_PANEL_SIZE 16
 #define HANDLE_HALF_SIZE 4
+
+#define MAX_HANDLES (MAX_PANELS - 1)
 #define MAX_SEGMENTS (MAX_PANELS * MAX_PANELS)
 
 enum layout_error {
@@ -204,9 +206,9 @@ static int32_t collect_segments(int32_t axis, BoundarySegment *out,
  * Walk the raw (unmerged) boundary pairs and flood-fill from the handle's
  * midpoint to find only the connected portion.
  */
-static void find_contiguous_boundary(int32_t axis, int32_t coord,
-                                     int32_t h_mid, int32_t *out_a0,
-                                     int32_t *out_a1) {
+static void find_contiguous_boundary(int32_t axis, int32_t coord, int32_t h_mid,
+                                     int32_t h_span0, int32_t h_span1,
+                                     int32_t *out_a0, int32_t *out_a1) {
   int32_t i;
   int32_t j;
   int32_t raw_count = 0;
@@ -289,9 +291,11 @@ static void find_contiguous_boundary(int32_t axis, int32_t coord,
   /*
    * Expand region by merging overlapping sub-segments.
    * For sub-segments that merely touch (share one endpoint), only merge
-   * if no perpendicular boundary exists at that touching point.
-   * A perpendicular boundary at the touch point means a T-junction where
-   * the handles should stay independent.
+   * if the handle's current span overlaps BOTH sub-segments.
+   *
+   * This correctly handles + junctions: a vertical handle spanning the
+   * full height will merge both halves of the vertical boundary, while
+   * horizontal handles confined to one column will not expand to the other.
    */
   do {
     merged = 0;
@@ -302,36 +306,12 @@ static void find_contiguous_boundary(int32_t axis, int32_t coord,
         do_merge = 1;
       } else if (a0s[i] == region_a1 || a1s[i] == region_a0) {
         /*
-         * Touching at one point. Merge only if the two sub-segments
-         * share a common area on at least one side of the boundary
-         * at the touching point. If areas on left and right of the
-         * boundary are different across the touch point, the handles
-         * are independent.
+         * Touching at one point. Merge only if the handle's current
+         * span overlaps the candidate sub-segment. This ensures that
+         * a handle only "claims" sub-segments it already covers,
+         * preventing handles from jumping across perpendicular splits.
          */
-        int32_t touch_pt = (a0s[i] == region_a1) ? a0s[i] : a1s[i];
-        int32_t share = 0;
-        int32_t k;
-        for (k = 0; k < g_data.area_count && !share; ++k) {
-          LayoutArea *ak = &g_data.areas[k];
-          if (axis == 0) {
-            /* vertical boundary at x=coord; touch_pt is a y value */
-            /* area must span across touch_pt on the y axis */
-            if (ak->y0 < touch_pt && ak->y1 > touch_pt) {
-              /* area touches boundary on left or right */
-              if (ak->x1 == coord || ak->x0 == coord) {
-                share = 1;
-              }
-            }
-          } else {
-            /* horizontal boundary at y=coord; touch_pt is an x value */
-            if (ak->x0 < touch_pt && ak->x1 > touch_pt) {
-              if (ak->y1 == coord || ak->y0 == coord) {
-                share = 1;
-              }
-            }
-          }
-        }
-        if (share) {
+        if (overlap_len(a0s[i], a1s[i], h_span0, h_span1) > 0) {
           do_merge = 1;
         }
       }
@@ -439,8 +419,8 @@ static int32_t update_handle_from_topology(int32_t handle_index) {
    * sub-range that actually covers the handle's midpoint. This prevents
    * two handles from "sticking" when they touch at a single point.
    */
-  find_contiguous_boundary(axis, segs[best].coord, h_mid, &region_a0,
-                           &region_a1);
+  find_contiguous_boundary(axis, segs[best].coord, h_mid, h_span0, h_span1,
+                           &region_a0, &region_a1);
 
   if (region_a0 >= region_a1) {
     /* fallback: use full segment */
@@ -566,8 +546,7 @@ static int32_t prefers_vertical_split(const LayoutArea *a, int32_t corner,
   return dx >= dy;
 }
 
-__attribute__((export_name("init_screen"))) int32_t init_screen(int32_t w,
-                                                                int32_t h) {
+int32_t init_screen(int32_t w, int32_t h) {
   int32_t i;
   if (w <= 0 || h <= 0) {
     return reject(LAYOUT_ERR_INVALID_ARG);
@@ -607,8 +586,7 @@ __attribute__((export_name("init_screen"))) int32_t init_screen(int32_t w,
   return LAYOUT_OK;
 }
 
-__attribute__((export_name("resize_screen"))) int32_t resize_screen(int32_t w,
-                                                                     int32_t h) {
+int32_t resize_screen(int32_t w, int32_t h) {
   int32_t i;
   int32_t old_w;
   int32_t old_h;
@@ -666,8 +644,7 @@ __attribute__((export_name("resize_screen"))) int32_t resize_screen(int32_t w,
   return LAYOUT_OK;
 }
 
-__attribute__((export_name("move_handle"))) int32_t
-move_handle(int32_t handle_index, int32_t x, int32_t y) {
+int32_t move_handle(int32_t handle_index, int32_t x, int32_t y) {
   LayoutHandle *hnd;
   int32_t axis;
   int32_t split;
@@ -825,8 +802,8 @@ move_handle(int32_t handle_index, int32_t x, int32_t y) {
   return LAYOUT_OK;
 }
 
-__attribute__((export_name("move_corner"))) int32_t
-move_corner(int32_t area_index, int32_t corner_index, int32_t x, int32_t y) {
+int32_t move_corner(int32_t area_index, int32_t corner_index, int32_t x,
+                    int32_t y) {
   LayoutArea source;
   LayoutArea *dst_new;
   LayoutArea *dst_old;
@@ -918,8 +895,7 @@ move_corner(int32_t area_index, int32_t corner_index, int32_t x, int32_t y) {
   return reject(LAYOUT_ERR_OUT_OF_BOUNDS);
 }
 
-__attribute__((export_name("set_area_content"))) int32_t
-set_area_content(int32_t area_index, int32_t content_id) {
+int32_t set_area_content(int32_t area_index, int32_t content_id) {
   if (!g_data.initialized) {
     return reject(LAYOUT_ERR_NOT_INITIALIZED);
   }
@@ -932,8 +908,7 @@ set_area_content(int32_t area_index, int32_t content_id) {
   return LAYOUT_OK;
 }
 
-__attribute__((export_name("set_handle_content"))) int32_t
-set_handle_content(int32_t handle_index, int32_t content_id) {
+int32_t set_handle_content(int32_t handle_index, int32_t content_id) {
   if (!g_data.initialized) {
     return reject(LAYOUT_ERR_NOT_INITIALIZED);
   }
@@ -946,6 +921,4 @@ set_handle_content(int32_t handle_index, int32_t content_id) {
   return LAYOUT_OK;
 }
 
-__attribute__((export_name("get_data_ptr"))) int32_t get_data_ptr(void) {
-  return (int32_t)(uintptr_t)&g_data;
-}
+int32_t get_data_ptr(void) { return (int32_t)(uintptr_t)&g_data; }

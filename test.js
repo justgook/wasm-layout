@@ -286,6 +286,93 @@ async function run() {
   assertEq(api.move_handle(2, 292, 164), ERR.OK, "sticky: h2 still movable independently");
 
   console.log("[test] sticky-handle regression passed");
+
+  /* ========================================================
+   * Regression: aligned horizontal handles shrink vertical handle
+   * ========================================================
+   * Repro: init 400x400, vertical split at x=182, horizontal split
+   * left col at y=241, horizontal split right col at y=172.
+   * Then move one horizontal handle to align with the other.
+   * The vertical handle must STILL span full height 0..400.
+   *
+   * Layout before alignment:
+   *   area0=[0,0,182,241]     area1=[182,0,400,172]
+   *   area2=[0,241,182,400]   area3=[182,172,400,400]
+   *
+   * After aligning h2 to y=241 (or h1 to y=172), the vertical
+   * handle h0 at x=182 must still go 0..400.
+   */
+  assertEq(api.init_screen(400, 400), ERR.OK, "aligned: init_screen");
+
+  // Vertical split at x=182
+  assertEq(api.move_corner(0, 0, 182, 114), ERR.OK, "aligned: vertical split");
+  assertEq(header[5], 2, "aligned: 2 areas");
+  // area0=[0,0,182,400], area1=[182,0,400,400]
+
+  // Horizontal split left col at y=241
+  assertEq(api.move_corner(0, 0, 50, 241), ERR.OK, "aligned: h-split left col");
+  assertEq(header[5], 3, "aligned: 3 areas");
+  // area0=[0,0,182,241], area2=[0,241,182,400]
+
+  // Horizontal split right col at y=172
+  assertEq(api.move_corner(1, 1, 281, 172), ERR.OK, "aligned: h-split right col");
+  assertEq(header[5], 4, "aligned: 4 areas");
+  // area1=[182,0,400,172], area3=[182,172,400,400]
+
+  const ah0 = handleAtIndex(0); // vertical at x=182
+  const ah1 = handleAtIndex(1); // horizontal at y=241 (left col)
+  const ah2 = handleAtIndex(2); // horizontal at y=172 (right col)
+
+  // Verify vertical handle spans full height before alignment
+  assertEq(ah0[1], 0, "aligned: h0 y0=0 before alignment");
+  assertEq(ah0[3], 400, "aligned: h0 y1=400 before alignment");
+
+  // Move h1 (left horizontal) to align with h2 at y=172
+  assertEq(api.move_handle(1, 91, 172), ERR.OK, "aligned: move h1 to y=172");
+
+  // Vertical handle h0 MUST still span full height
+  assertEq(ah0[1], 0, "aligned: h0 y0 still 0 after alignment");
+  assertEq(ah0[3], 400, "aligned: h0 y1 still 400 after alignment");
+
+  // h1 and h2 must stay in their respective columns
+  assertEq(ah1[0], 0, "aligned: h1 x0=0 (left col only)");
+  assertEq(ah1[2], 182, "aligned: h1 x1=182 (left col only)");
+  assertEq(ah2[0], 182, "aligned: h2 x0=182 (right col only)");
+  assertEq(ah2[2], 400, "aligned: h2 x1=400 (right col only)");
+
+  // Also test alignment in the other direction: move h2 to y=172 back
+  // Reset with same layout
+  assertEq(api.init_screen(400, 400), ERR.OK, "aligned2: init_screen");
+  assertEq(api.move_corner(0, 0, 182, 114), ERR.OK, "aligned2: vertical split");
+  assertEq(api.move_corner(0, 0, 50, 241), ERR.OK, "aligned2: h-split left col");
+  assertEq(api.move_corner(1, 1, 281, 172), ERR.OK, "aligned2: h-split right col");
+
+  const bh0 = handleAtIndex(0);
+  const bh1 = handleAtIndex(1);
+  const bh2 = handleAtIndex(2);
+
+  // Move h2 (right horizontal) to align with h1 at y=241
+  assertEq(api.move_handle(2, 291, 241), ERR.OK, "aligned2: move h2 to y=241");
+
+  // Vertical handle MUST still span full height
+  assertEq(bh0[1], 0, "aligned2: h0 y0 still 0 after alignment");
+  assertEq(bh0[3], 400, "aligned2: h0 y1 still 400 after alignment");
+
+  // Handles must stay in their respective columns
+  assertEq(bh1[0], 0, "aligned2: h1 x0=0 (left col only)");
+  assertEq(bh1[2], 182, "aligned2: h1 x1=182 (left col only)");
+  assertEq(bh2[0], 182, "aligned2: h2 x0=182 (right col only)");
+  assertEq(bh2[2], 400, "aligned2: h2 x1=400 (right col only)");
+
+  // And both handles must be independently movable after alignment
+  assertEq(api.move_handle(1, 91, 200), ERR.OK, "aligned2: h1 movable after align");
+  assertEq(api.move_handle(2, 291, 300), ERR.OK, "aligned2: h2 movable after align");
+
+  // Vertical handle STILL full height
+  assertEq(bh0[1], 0, "aligned2: h0 y0 still 0 after post-align moves");
+  assertEq(bh0[3], 400, "aligned2: h0 y1 still 400 after post-align moves");
+
+  console.log("[test] aligned-handles regression passed");
   console.log("[test] all checks passed");
 }
 
