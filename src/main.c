@@ -79,6 +79,7 @@ static layout_i32 g_handle_col_x1[MAX_HANDLES];
 /* ── Forward declarations ──────────────────────────────────────────── */
 
 static void rebuild_handles(void);
+static void recompute_handle_rect_scoped(layout_i32 idx);
 
 /* ── Snapshot helpers ──────────────────────────────────────────────── */
 
@@ -170,6 +171,14 @@ layout_i32 resize_screen(layout_i32 w, layout_i32 h, layout_i32 handle_size) {
     g_info.screen_w         = w;
     g_info.screen_h         = h;
     g_info.handle_half_size = handle_size;
+
+    /*
+     * Handle thickness is derived from handle_half_size and needs a
+     * recompute pass so existing handles snap to the new size.
+     */
+    for (layout_i32 i = 0; i < g_info.handle_count; i++) {
+        recompute_handle_rect_scoped(i);
+    }
 
     bump_generation();
     set_error(LAYOUT_OK);

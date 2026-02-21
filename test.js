@@ -161,13 +161,16 @@ async function run() {
   const preResizeArea0Y1 = area0[3];
   const preResizeArea1X0 = area1[0];
   const preResizeArea1X1 = area1[2];
-  assertEq(api.resize_screen(1200, 900, HANDLE_SIZE), ERR.OK, "resize_screen succeeds");
+  const resizedHandleSize = HANDLE_SIZE + 3;
+  assertEq(api.resize_screen(1200, 900, resizedHandleSize), ERR.OK, "resize_screen succeeds");
   assertEq(header[1], 1200, "screen width after resize");
   assertEq(header[2], 900, "screen height after resize");
+  assertEq(header[13], resizedHandleSize, "handle half size updates on resize");
   assertEq(area0[2], Math.trunc(preResizeArea0X1 * 1200 / 800), "area0 x1 scales on resize");
   assertEq(area0[3], Math.trunc(preResizeArea0Y1 * 900 / 600), "area0 y1 scales on resize");
   assertEq(area1[0], Math.trunc(preResizeArea1X0 * 1200 / 800), "area1 x0 scales on resize");
   assertEq(area1[2], Math.trunc(preResizeArea1X1 * 1200 / 800), "area1 x1 scales on resize");
+  assertEq(handle0[2] - handle0[0], resizedHandleSize * 2, "vertical handle thickness updates on resize");
 
   console.log("[test] basic checks passed");
 

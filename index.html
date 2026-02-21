@@ -91,6 +91,16 @@
       background: #fff;
     }
 
+    input[type="checkbox"] {
+      min-height: auto;
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      border-radius: 4px;
+      accent-color: var(--accent);
+      align-self: flex-start;
+    }
+
     button {
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -293,6 +303,11 @@
         <button class="secondary" id="resize">Resize Screen</button>
       </div>
 
+      <label>
+        <span>Auto Resize On Window Resize</span>
+        <input id="auto-resize" type="checkbox" checked>
+      </label>
+
       <div class="row">
         <label>Area Index
           <input id="area-index" type="number" value="0" min="0">
@@ -343,6 +358,7 @@
       minPanelSize: document.getElementById("min-panel-size"),
       init: document.getElementById("init"),
       resize: document.getElementById("resize"),
+      autoResize: document.getElementById("auto-resize"),
       areaIndex: document.getElementById("area-index"),
       areaContent: document.getElementById("area-content"),
       setAreaContent: document.getElementById("set-area-content"),
@@ -355,6 +371,9 @@
     let api = null;
     let memory = null;
     let dataPtr = 0;
+    let autoResizeRaf = 0;
+    let lastAutoW = -1;
+    let lastAutoH = -1;
 
     const dragState = {
       active: false,
@@ -573,6 +592,41 @@
       return parseInt(input.value, 10) || 0;
     }
 
+    function stageWrapSize() {
+      const wrap = ui.stage.parentElement;
+      const styles = getComputedStyle(wrap);
+      const width = Math.floor(wrap.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight));
+      const height = Math.floor(wrap.clientHeight - parseFloat(styles.paddingTop) - parseFloat(styles.paddingBottom));
+      return {
+        width: Math.max(64, width),
+        height: Math.max(64, height),
+      };
+    }
+
+    function resizeToPanel() {
+      if (!api) return;
+      const size = stageWrapSize();
+      if (size.width === lastAutoW && size.height === lastAutoH) return;
+      lastAutoW = size.width;
+      lastAutoH = size.height;
+      ui.w.value = String(size.width);
+      ui.h.value = String(size.height);
+      const err = api.resize_screen(size.width, size.height, readInt(ui.handleSize));
+      if (err !== 0) {
+        log(`auto resize_screen(${size.width}, ${size.height}, ${ui.handleSize.value}) => ${err} (${ERR[err] || "unknown"})`);
+      }
+      render();
+    }
+
+    function scheduleAutoResize() {
+      if (!ui.autoResize.checked) return;
+      if (autoResizeRaf !== 0) return;
+      autoResizeRaf = requestAnimationFrame(() => {
+        autoResizeRaf = 0;
+        resizeToPanel();
+      });
+    }
+
     async function boot() {
       const response = await fetch("./layout.wasm");
       const wasmBytes = await response.arrayBuffer();
@@ -589,6 +643,7 @@
       log(`wasm ready; exports: ${Object.keys(api).sort().join(", ")}`);
 
       callAndRender(`init_screen(${ui.w.value}, ${ui.h.value}, ${ui.handleSize.value}, ${ui.minPanelSize.value})`, () => api.init_screen(readInt(ui.w), readInt(ui.h), readInt(ui.handleSize), readInt(ui.minPanelSize)));
+      scheduleAutoResize();
     }
 
     ui.init.addEventListener("click", () => {
@@ -603,6 +658,14 @@
       const idx = readInt(ui.areaIndex);
       const content = readInt(ui.areaContent);
       callAndRender(`set_area_content(${idx}, ${content})`, () => api.set_area_content(idx, content));
+    });
+
+    window.addEventListener("resize", scheduleAutoResize);
+
+    ui.autoResize.addEventListener("change", () => {
+      if (ui.autoResize.checked) {
+        scheduleAutoResize();
+      }
     });
 
     document.addEventListener("pointermove", (ev) => {
