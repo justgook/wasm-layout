@@ -65,6 +65,11 @@ typedef struct {
   layout_i32 min_panel_size;         /* smallest allowed area dimension */
   LayoutArea areas[MAX_PANELS];      /* area slots                      */
   LayoutHandle handles[MAX_HANDLES]; /* handle slots                    */
+  layout_i32 try_valid;              /* 1 when try_corner preview valid */
+  layout_i32 try_x0;                 /* preview rect x0                 */
+  layout_i32 try_y0;                 /* preview rect y0                 */
+  layout_i32 try_x1;                 /* preview rect x1                 */
+  layout_i32 try_y1;                 /* preview rect y1                 */
 } LayoutInfo;
 
 /* ── API ───────────────────────────────────────────────────────────── */
@@ -86,6 +91,11 @@ layout_i32 move_handle(layout_i32 handle_index, layout_i32 x, layout_i32 y);
 LAYOUT_EXPORT("move_corner")
 layout_i32 move_corner(layout_i32 area_index, layout_i32 corner_index,
                        layout_i32 x, layout_i32 y);
+
+/* Compute preview rect for corner drag (non-mutating).                */
+LAYOUT_EXPORT("try_corner")
+layout_i32 try_corner(layout_i32 area_index, layout_i32 corner_index,
+                      layout_i32 x, layout_i32 y);
 
 /* Assign a content tag to an area.                                    */
 LAYOUT_EXPORT("set_area_content")

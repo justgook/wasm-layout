@@ -100,6 +100,22 @@ static void bump_generation(void) {
     g_info.generation += 1;
 }
 
+static void set_try_preview(layout_i32 valid, layout_i32 x0, layout_i32 y0,
+                            layout_i32 x1, layout_i32 y1) {
+    g_info.try_valid = valid;
+    g_info.try_x0 = x0;
+    g_info.try_y0 = y0;
+    g_info.try_x1 = x1;
+    g_info.try_y1 = y1;
+}
+
+static void set_try_preview_from_area(layout_i32 area_index) {
+    if (!g_info.initialized) return;
+    if (area_index < 0 || area_index >= g_info.area_count) return;
+    LayoutArea *a = &g_info.areas[area_index];
+    set_try_preview(1, a->x0, a->y0, a->x1, a->y1);
+}
+
 /* ── Initialization ────────────────────────────────────────────────── */
 
 LAYOUT_EXPORT("init_screen")
@@ -711,6 +727,193 @@ static layout_i32 try_simple_merge(layout_i32 src_idx, layout_i32 tgt_idx) {
         recompute_handle_rect_scoped(i);
     }
 
+    return LAYOUT_OK;
+}
+
+static layout_i32 try_simple_merge_preview(layout_i32 src_idx, layout_i32 tgt_idx,
+                                           layout_i32 *out_x0, layout_i32 *out_y0,
+                                           layout_i32 *out_x1, layout_i32 *out_y1) {
+    LayoutArea *src = &g_info.areas[src_idx];
+    LayoutArea *tgt = &g_info.areas[tgt_idx];
+
+    layout_i32 boundary_axis = -1;
+    layout_i32 boundary_val  = -1;
+    layout_i32 left_idx = -1, right_idx = -1;
+    layout_i32 top_idx  = -1, bot_idx   = -1;
+
+    if (src->x1 == tgt->x0 && src->y0 == tgt->y0 && src->y1 == tgt->y1) {
+        boundary_axis = AXIS_VERTICAL;
+        boundary_val  = src->x1;
+        left_idx = src_idx; right_idx = tgt_idx;
+    } else if (tgt->x1 == src->x0 && tgt->y0 == src->y0 && tgt->y1 == src->y1) {
+        boundary_axis = AXIS_VERTICAL;
+        boundary_val  = tgt->x1;
+        left_idx = tgt_idx; right_idx = src_idx;
+    } else if (src->y1 == tgt->y0 && src->x0 == tgt->x0 && src->x1 == tgt->x1) {
+        boundary_axis = AXIS_HORIZONTAL;
+        boundary_val  = src->y1;
+        top_idx = src_idx; bot_idx = tgt_idx;
+    } else if (tgt->y1 == src->y0 && tgt->x0 == src->x0 && tgt->x1 == src->x1) {
+        boundary_axis = AXIS_HORIZONTAL;
+        boundary_val  = tgt->y1;
+        top_idx = tgt_idx; bot_idx = src_idx;
+    }
+
+    if (boundary_axis == -1) {
+        return LAYOUT_ERR_NOT_IMPLEMENTED;
+    }
+
+    layout_i32 hnd_idx = -1;
+    for (layout_i32 i = 0; i < g_info.handle_count; i++) {
+        if (g_handle_axis[i] == boundary_axis) {
+            if (boundary_axis == AXIS_VERTICAL) {
+                layout_i32 bx = (g_info.handles[i].x0 + g_info.handles[i].x1) / 2;
+                if (bx == boundary_val) { hnd_idx = i; break; }
+            } else {
+                layout_i32 by = (g_info.handles[i].y0 + g_info.handles[i].y1) / 2;
+                if (by == boundary_val) { hnd_idx = i; break; }
+            }
+        }
+    }
+    if (hnd_idx == -1) {
+        return LAYOUT_ERR_NOT_IMPLEMENTED;
+    }
+
+    if (boundary_axis == AXIS_VERTICAL) {
+        layout_i32 shared_y0 = g_info.areas[left_idx].y0;
+        layout_i32 shared_y1 = g_info.areas[left_idx].y1;
+        if (g_info.handles[hnd_idx].y0 != shared_y0 ||
+            g_info.handles[hnd_idx].y1 != shared_y1) {
+            return LAYOUT_ERR_NOT_IMPLEMENTED;
+        }
+        *out_x0 = g_info.areas[left_idx].x0;
+        *out_y0 = g_info.areas[left_idx].y0;
+        *out_x1 = g_info.areas[right_idx].x1;
+        *out_y1 = g_info.areas[right_idx].y1;
+    } else {
+        layout_i32 shared_x0 = g_info.areas[top_idx].x0;
+        layout_i32 shared_x1 = g_info.areas[top_idx].x1;
+        if (g_info.handles[hnd_idx].x0 != shared_x0 ||
+            g_info.handles[hnd_idx].x1 != shared_x1) {
+            return LAYOUT_ERR_NOT_IMPLEMENTED;
+        }
+        *out_x0 = g_info.areas[top_idx].x0;
+        *out_y0 = g_info.areas[top_idx].y0;
+        *out_x1 = g_info.areas[bot_idx].x1;
+        *out_y1 = g_info.areas[bot_idx].y1;
+    }
+
+    return LAYOUT_OK;
+}
+
+LAYOUT_EXPORT("try_corner")
+layout_i32 try_corner(layout_i32 area_index, layout_i32 corner_index,
+                      layout_i32 x, layout_i32 y) {
+    if (!g_info.initialized) {
+        set_error(LAYOUT_ERR_NOT_INITIALIZED);
+        return LAYOUT_ERR_NOT_INITIALIZED;
+    }
+    if (area_index < 0 || area_index >= g_info.area_count) {
+        set_error(LAYOUT_ERR_INVALID_AREA);
+        return LAYOUT_ERR_INVALID_AREA;
+    }
+    if (corner_index < 0 || corner_index > 3) {
+        set_try_preview_from_area(area_index);
+        set_error(LAYOUT_ERR_INVALID_CORNER);
+        return LAYOUT_ERR_INVALID_CORNER;
+    }
+    if (x < 0 || x >= g_info.screen_w || y < 0 || y >= g_info.screen_h) {
+        set_try_preview_from_area(area_index);
+        set_error(LAYOUT_ERR_OUT_OF_BOUNDS);
+        return LAYOUT_ERR_OUT_OF_BOUNDS;
+    }
+
+    LayoutArea *src = &g_info.areas[area_index];
+
+    if (!point_in_area(area_index, x, y)) {
+        layout_i32 tgt_idx = -1;
+        for (layout_i32 i = 0; i < g_info.area_count; i++) {
+            if (i == area_index) continue;
+            if (point_in_area(i, x, y)) { tgt_idx = i; break; }
+        }
+        if (tgt_idx == -1) {
+            set_try_preview_from_area(area_index);
+            set_error(LAYOUT_ERR_OUT_OF_BOUNDS);
+            return LAYOUT_ERR_OUT_OF_BOUNDS;
+        }
+
+        layout_i32 px0, py0, px1, py1;
+        layout_i32 err = try_simple_merge_preview(area_index, tgt_idx, &px0, &py0, &px1, &py1);
+        if (err == LAYOUT_OK) {
+            set_try_preview(1, px0, py0, px1, py1);
+        } else {
+            set_try_preview_from_area(area_index);
+        }
+        set_error(err);
+        return err;
+    }
+
+    if (g_info.area_count >= MAX_PANELS) {
+        set_try_preview_from_area(area_index);
+        set_error(LAYOUT_ERR_CAPACITY);
+        return LAYOUT_ERR_CAPACITY;
+    }
+    if (g_info.handle_count >= MAX_HANDLES) {
+        set_try_preview_from_area(area_index);
+        set_error(LAYOUT_ERR_CAPACITY);
+        return LAYOUT_ERR_CAPACITY;
+    }
+
+    layout_i32 cx, cy;
+    switch (corner_index) {
+        case 0: cx = src->x0; cy = src->y0; break;
+        case 1: cx = src->x1; cy = src->y0; break;
+        case 2: cx = src->x1; cy = src->y1; break;
+        case 3: cx = src->x0; cy = src->y1; break;
+        default: cx = 0; cy = 0; break;
+    }
+
+    layout_i32 dx = abs_i32(x - cx);
+    layout_i32 dy = abs_i32(y - cy);
+    layout_i32 axis = (dy > dx) ? AXIS_HORIZONTAL : AXIS_VERTICAL;
+    layout_i32 min = g_info.min_panel_size;
+
+    layout_i32 sx0 = src->x0, sy0 = src->y0;
+    layout_i32 sx1 = src->x1, sy1 = src->y1;
+
+    if (axis == AXIS_VERTICAL) {
+        layout_i32 split_x = x;
+        if (split_x - sx0 < min) split_x = sx0 + min;
+        if (sx1 - split_x < min) split_x = sx1 - min;
+        if (split_x <= sx0 || split_x >= sx1) {
+            set_try_preview_from_area(area_index);
+            set_error(LAYOUT_ERR_MIN_SIZE);
+            return LAYOUT_ERR_MIN_SIZE;
+        }
+
+        if (corner_index == 0 || corner_index == 3) {
+            set_try_preview(1, sx0, sy0, split_x, sy1);
+        } else {
+            set_try_preview(1, split_x, sy0, sx1, sy1);
+        }
+    } else {
+        layout_i32 split_y = y;
+        if (split_y - sy0 < min) split_y = sy0 + min;
+        if (sy1 - split_y < min) split_y = sy1 - min;
+        if (split_y <= sy0 || split_y >= sy1) {
+            set_try_preview_from_area(area_index);
+            set_error(LAYOUT_ERR_MIN_SIZE);
+            return LAYOUT_ERR_MIN_SIZE;
+        }
+
+        if (corner_index == 0 || corner_index == 1) {
+            set_try_preview(1, sx0, sy0, sx1, split_y);
+        } else {
+            set_try_preview(1, sx0, split_y, sx1, sy1);
+        }
+    }
+
+    set_error(LAYOUT_OK);
     return LAYOUT_OK;
 }
 

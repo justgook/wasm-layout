@@ -264,6 +264,16 @@
       z-index: 2;
     }
 
+    .try-rect {
+      position: absolute;
+      border: 2px solid rgba(29, 106, 162, 0.95);
+      background: rgba(29, 106, 162, 0.2);
+      border-radius: 8px;
+      pointer-events: none;
+      display: none;
+      z-index: 2;
+    }
+
     @media (max-width: 980px) {
       .app {
         grid-template-columns: 1fr;
@@ -325,6 +335,7 @@
 
     <main class="stage-wrap">
       <div id="stage">
+        <div class="try-rect" id="try-rect"></div>
         <div class="drag-dot" id="drag-dot"></div>
       </div>
     </main>
@@ -336,6 +347,8 @@
       AREA_I32: 5,
       HANDLE_I32: 5,
       MAX_PANELS: 16,
+      MAX_HANDLES: 15,
+      TRY_I32: 5,
     };
 
     const ERR = {
@@ -363,6 +376,7 @@
       areaContent: document.getElementById("area-content"),
       setAreaContent: document.getElementById("set-area-content"),
       stage: document.getElementById("stage"),
+      tryRect: document.getElementById("try-rect"),
       dragDot: document.getElementById("drag-dot"),
       meta: document.getElementById("meta"),
       log: document.getElementById("log"),
@@ -386,9 +400,13 @@
       lastLiveX: -1,
       lastLiveY: -1,
       lastLiveErr: 0,
+      lastTryX: -1,
+      lastTryY: -1,
+      lastTryErr: 0,
     };
 
     let liveHandleRaf = 0;
+    let liveCornerRaf = 0;
 
     function startDragCorner(areaIndex, cornerIndex, x, y) {
       dragState.active = true;
@@ -398,9 +416,13 @@
       dragState.handleIndex = -1;
       dragState.x = x;
       dragState.y = y;
+      dragState.lastTryX = -1;
+      dragState.lastTryY = -1;
+      dragState.lastTryErr = 0;
       ui.dragDot.style.display = "block";
       ui.dragDot.style.left = `${x}px`;
       ui.dragDot.style.top = `${y}px`;
+      scheduleLiveCornerTry();
     }
 
     function startDragHandle(handleIndex, x, y) {
@@ -440,6 +462,27 @@
           log(`move_handle(${dragState.handleIndex}, ${dragState.x}, ${dragState.y}) => ${err} (${ERR[err] || "unknown"})`);
           render();
         }
+      });
+    }
+
+    function scheduleLiveCornerTry() {
+      if (liveCornerRaf !== 0) return;
+      liveCornerRaf = requestAnimationFrame(() => {
+        let err;
+        liveCornerRaf = 0;
+        if (!dragState.active || dragState.mode !== "corner") return;
+        if (dragState.x === dragState.lastTryX && dragState.y === dragState.lastTryY) {
+          return;
+        }
+
+        err = api.try_corner(dragState.areaIndex, dragState.corner, dragState.x, dragState.y);
+        dragState.lastTryX = dragState.x;
+        dragState.lastTryY = dragState.y;
+        if (err !== 0 && err !== dragState.lastTryErr) {
+          log(`try_corner(${dragState.areaIndex}, ${dragState.corner}, ${dragState.x}, ${dragState.y}) => ${err} (${ERR[err] || "unknown"})`);
+        }
+        dragState.lastTryErr = err;
+        render();
       });
     }
 
@@ -498,6 +541,18 @@
       };
     }
 
+    function tryRect() {
+      const base = ABI.HEADER_I32 + ABI.MAX_PANELS * ABI.AREA_I32 + ABI.MAX_HANDLES * ABI.HANDLE_I32;
+      const v = i32();
+      return {
+        valid: v[base + 0],
+        x0: v[base + 1],
+        y0: v[base + 2],
+        x1: v[base + 3],
+        y1: v[base + 4],
+      };
+    }
+
     function toLocalStage(clientX, clientY) {
       const rect = ui.stage.getBoundingClientRect();
       const x = Math.floor(clientX - rect.left);
@@ -507,6 +562,7 @@
 
     function render() {
       const h = header();
+      const tr = tryRect();
       ui.stage.style.width = `${Math.max(220, h.screenW)}px`;
       ui.stage.style.height = `${Math.max(180, h.screenH)}px`;
 
@@ -566,6 +622,16 @@
         ui.stage.appendChild(el);
       }
 
+      if (dragState.active && dragState.mode === "corner" && tr.valid) {
+        ui.tryRect.style.display = "block";
+        ui.tryRect.style.left = `${tr.x0}px`;
+        ui.tryRect.style.top = `${tr.y0}px`;
+        ui.tryRect.style.width = `${Math.max(1, tr.x1 - tr.x0)}px`;
+        ui.tryRect.style.height = `${Math.max(1, tr.y1 - tr.y0)}px`;
+      } else {
+        ui.tryRect.style.display = "none";
+      }
+
       ui.meta.textContent = [
         `initialized: ${h.initialized}`,
         `screen: ${h.screenW} x ${h.screenH}`,
@@ -578,6 +644,8 @@
         `last_xy: ${h.lastX}, ${h.lastY}`,
         `handle_half_size: ${h.handleHalfSize}`,
         `min_panel_size: ${h.minPanelSize}`,
+        `try_valid: ${tr.valid}`,
+        `try_rect: ${tr.x0}, ${tr.y0}, ${tr.x1}, ${tr.y1}`,
       ].join("\n");
     }
 
@@ -677,6 +745,8 @@
       ui.dragDot.style.top = `${local.y}px`;
       if (dragState.mode === "handle") {
         scheduleLiveHandleMove();
+      } else if (dragState.mode === "corner") {
+        scheduleLiveCornerTry();
       }
     });
 
@@ -692,6 +762,10 @@
       if (liveHandleRaf !== 0) {
         cancelAnimationFrame(liveHandleRaf);
         liveHandleRaf = 0;
+      }
+      if (liveCornerRaf !== 0) {
+        cancelAnimationFrame(liveCornerRaf);
+        liveCornerRaf = 0;
       }
 
       dragState.active = false;

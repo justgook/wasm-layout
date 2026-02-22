@@ -19,6 +19,8 @@ const ABI = {
   AREA_I32: 5,
   HANDLE_I32: 5,
   MAX_PANELS: 16,
+  MAX_HANDLES: 15,
+  TRY_I32: 5,
 };
 
 const HANDLE_SIZE = 4;
@@ -56,6 +58,9 @@ async function run() {
   }
   if (typeof api.resize_screen !== "function") {
     throw new Error("missing export: resize_screen");
+  }
+  if (typeof api.try_corner !== "function") {
+    throw new Error("missing export: try_corner");
   }
 
   assertEq(api.move_handle(0, 10, 10), ERR.NOT_INITIALIZED, "move_handle before init must fail");
@@ -103,6 +108,8 @@ async function run() {
 
   const handleBaseI32 = ABI.HEADER_I32 + ABI.MAX_PANELS * ABI.AREA_I32;
   const handle0 = new Int32Array(memory.buffer, dataPtr + handleBaseI32 * 4, ABI.HANDLE_I32);
+  const tryBaseI32 = ABI.HEADER_I32 + ABI.MAX_PANELS * ABI.AREA_I32 + ABI.MAX_HANDLES * ABI.HANDLE_I32;
+  const tryRect = new Int32Array(memory.buffer, dataPtr + tryBaseI32 * 4, ABI.TRY_I32);
 
   assertEq(api.move_handle(0, 10, 10), ERR.INVALID_HANDLE, "no handles exist before first split");
   assertEq(api.move_handle(999, 10, 10), ERR.INVALID_HANDLE, "invalid handle id");
@@ -173,6 +180,56 @@ async function run() {
   assertEq(handle0[2] - handle0[0], resizedHandleSize * 2, "vertical handle thickness updates on resize");
 
   console.log("[test] basic checks passed");
+
+  /* ========================================================
+   * try_corner preview tests (non-mutating)
+   * ======================================================== */
+
+  assertEq(api.init_screen(400, 300, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "try: init");
+  const genBeforeTry = header[8];
+
+  // Vertical split intent from left corner returns left preview piece.
+  assertEq(api.try_corner(0, 0, 250, 40), ERR.OK, "try: left corner vertical preview");
+  assertEq(tryRect[0], 1, "try: preview marked valid");
+  assertEq(tryRect[1], 0, "try: left preview x0");
+  assertEq(tryRect[2], 0, "try: left preview y0");
+  assertEq(tryRect[3], 250, "try: left preview x1");
+  assertEq(tryRect[4], 300, "try: left preview y1");
+
+  // Vertical split intent from right corner returns right preview piece.
+  assertEq(api.try_corner(0, 1, 250, 40), ERR.OK, "try: right corner vertical preview");
+  assertEq(tryRect[1], 250, "try: right preview x0");
+  assertEq(tryRect[2], 0, "try: right preview y0");
+  assertEq(tryRect[3], 400, "try: right preview x1");
+  assertEq(tryRect[4], 300, "try: right preview y1");
+
+  // Error keeps preview as source area, does not clear it.
+  assertEq(api.try_corner(0, 0, 999, 50), ERR.OUT_OF_BOUNDS, "try: out-of-bounds error");
+  assertEq(tryRect[0], 1, "try: error still keeps preview valid");
+  assertEq(tryRect[1], 0, "try: fallback preview x0");
+  assertEq(tryRect[2], 0, "try: fallback preview y0");
+  assertEq(tryRect[3], 400, "try: fallback preview x1");
+  assertEq(tryRect[4], 300, "try: fallback preview y1");
+
+  // try_corner must not mutate layout or generation.
+  assertEq(header[5], 1, "try: area_count unchanged");
+  assertEq(header[6], 0, "try: handle_count unchanged");
+  assertEq(area0[0], 0, "try: area0 x0 unchanged");
+  assertEq(area0[1], 0, "try: area0 y0 unchanged");
+  assertEq(area0[2], 400, "try: area0 x1 unchanged");
+  assertEq(area0[3], 300, "try: area0 y1 unchanged");
+  assertEq(header[8], genBeforeTry, "try: generation unchanged");
+
+  // Merge preview covers both areas that would become one.
+  assertEq(api.move_corner(0, 2, 200, 150), ERR.OK, "try-merge: split at x=200");
+  assertEq(api.try_corner(1, 0, 50, 100), ERR.OK, "try-merge: preview merge area1 into area0");
+  assertEq(tryRect[0], 1, "try-merge: preview valid");
+  assertEq(tryRect[1], 0, "try-merge: merged preview x0");
+  assertEq(tryRect[2], 0, "try-merge: merged preview y0");
+  assertEq(tryRect[3], 400, "try-merge: merged preview x1");
+  assertEq(tryRect[4], 300, "try-merge: merged preview y1");
+
+  console.log("[test] try_corner preview checks passed");
 
   /* ========================================================
    * Regression: 3-column layout with horizontal splits
