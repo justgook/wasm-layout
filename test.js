@@ -310,6 +310,55 @@ async function run() {
   console.log("[test] sticky-handle regression passed");
 
   /* ========================================================
+   * Regression: vertical handles in separate rows must remain
+   * independent when aligned to the same x.
+   * ========================================================
+   *
+   * Layout:
+   *   1) split horizontally at y=200
+   *   2) split top row vertically at x=150
+   *   3) split bottom row vertically at x=250
+   *
+   * Handles:
+   *   h0 = horizontal at y=200 (full width)
+   *   h1 = vertical in top row (y: 0..200)
+   *   h2 = vertical in bottom row (y: 200..400)
+   *
+   * Moving h1 to x=250 (same x as h2) must NOT merge spans.
+   */
+  assertEq(api.init_screen(400, 400, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "sticky-v: init_screen");
+  assertEq(api.move_corner(0, 2, 300, 200), ERR.OK, "sticky-v: horizontal split");
+  assertEq(api.move_corner(0, 2, 150, 100), ERR.OK, "sticky-v: top vertical split");
+  assertEq(api.move_corner(1, 2, 250, 300), ERR.OK, "sticky-v: bottom vertical split");
+
+  const sv1 = handleAtIndex(1); // top-row vertical
+  const sv2 = handleAtIndex(2); // bottom-row vertical
+
+  assertEq(sv1[1],   0, "sticky-v: h1 y0 initially 0");
+  assertEq(sv1[3], 200, "sticky-v: h1 y1 initially 200");
+  assertEq(sv2[1], 200, "sticky-v: h2 y0 initially 200");
+  assertEq(sv2[3], 400, "sticky-v: h2 y1 initially 400");
+
+  assertEq(api.move_handle(1, 250, 100), ERR.OK, "sticky-v: align h1 x with h2");
+
+  // Still independent by row.
+  assertEq(sv1[1],   0, "sticky-v: h1 y0 still 0 after align");
+  assertEq(sv1[3], 200, "sticky-v: h1 y1 still 200 after align");
+  assertEq(sv2[1], 200, "sticky-v: h2 y0 still 200 after align");
+  assertEq(sv2[3], 400, "sticky-v: h2 y1 still 400 after align");
+
+  // And they remain independently movable.
+  assertEq(api.move_handle(1, 260, 100), ERR.OK, "sticky-v: move h1 independently");
+  assertEq(((sv1[0] + sv1[2]) / 2) | 0, 260, "sticky-v: h1 midpoint moved to 260");
+  assertEq(((sv2[0] + sv2[2]) / 2) | 0, 250, "sticky-v: h2 midpoint stays 250");
+
+  assertEq(api.move_handle(2, 240, 300), ERR.OK, "sticky-v: move h2 independently");
+  assertEq(((sv1[0] + sv1[2]) / 2) | 0, 260, "sticky-v: h1 midpoint still 260");
+  assertEq(((sv2[0] + sv2[2]) / 2) | 0, 240, "sticky-v: h2 midpoint moved to 240");
+
+  console.log("[test] sticky-vertical-handle regression passed");
+
+  /* ========================================================
    * Regression: aligned horizontal handles shrink vertical handle
    * ========================================================
    * Repro: init 400x400, vertical split at x=182, horizontal split
@@ -517,6 +566,72 @@ async function run() {
   assertEq(api.move_handle(2, 110, 250), ERR.OK, "vspan: h2 still movable");
 
   console.log("[test] vertical-handle-span-update regression passed");
+
+  /* ========================================================
+   * Regression: resize after mixed splits must preserve
+   * valid handle spans and independent columns.
+   * ========================================================
+   *
+   * Build 3 columns on 900x600, then split col0 and col1
+   * horizontally:
+   *   h0 vertical at x=300
+   *   h1 vertical at x=600
+   *   h2 horizontal in col0 (x=0..300)
+   *   h3 horizontal in col1 (x=300..600)
+   *
+   * After resize to 1200x900:
+   *   h0,h1 stay full-height
+   *   h2 spans x=0..400
+   *   h3 spans x=400..800
+   *
+   * Then moves should keep spans non-inverted and columns coupled
+   * to vertical boundary moves.
+   */
+  assertEq(api.init_screen(900, 600, HANDLE_SIZE, MIN_PANEL_SIZE), ERR.OK, "resize-mixed: init");
+  assertEq(api.move_corner(0, 2, 300, 400), ERR.OK, "resize-mixed: first v-split");
+  assertEq(api.move_corner(1, 2, 600, 400), ERR.OK, "resize-mixed: second v-split");
+  assertEq(api.move_corner(0, 2, 150, 250), ERR.OK, "resize-mixed: h-split col0");
+  assertEq(api.move_corner(1, 2, 450, 350), ERR.OK, "resize-mixed: h-split col1");
+  assertEq(header[6], 4, "resize-mixed: 4 handles before resize");
+
+  assertEq(api.resize_screen(1200, 900, HANDLE_SIZE), ERR.OK, "resize-mixed: resize");
+  assertEq(header[1], 1200, "resize-mixed: screen width");
+  assertEq(header[2], 900, "resize-mixed: screen height");
+
+  const rz0 = handleAtIndex(0);
+  const rz1 = handleAtIndex(1);
+  const rz2 = handleAtIndex(2);
+  const rz3 = handleAtIndex(3);
+
+  // Vertical handles remain full-height.
+  assertEq(rz0[1], 0, "resize-mixed: h0 y0=0 after resize");
+  assertEq(rz0[3], 900, "resize-mixed: h0 y1=900 after resize");
+  assertEq(rz1[1], 0, "resize-mixed: h1 y0=0 after resize");
+  assertEq(rz1[3], 900, "resize-mixed: h1 y1=900 after resize");
+
+  // Horizontal handles remain scoped to their columns.
+  assertEq(rz2[0], 0, "resize-mixed: h2 x0=0 after resize");
+  assertEq(rz2[2], 400, "resize-mixed: h2 x1=400 after resize");
+  assertEq(rz3[0], 400, "resize-mixed: h3 x0=400 after resize");
+  assertEq(rz3[2], 800, "resize-mixed: h3 x1=800 after resize");
+
+  // No inverted extents after resize.
+  assertEq(rz0[0] <= rz0[2], true, "resize-mixed: h0 x extent non-inverted");
+  assertEq(rz0[1] <= rz0[3], true, "resize-mixed: h0 y extent non-inverted");
+  assertEq(rz2[0] <= rz2[2], true, "resize-mixed: h2 x extent non-inverted");
+  assertEq(rz2[1] <= rz2[3], true, "resize-mixed: h2 y extent non-inverted");
+
+  // Horizontal handle remains movable in its column.
+  assertEq(api.move_handle(2, 200, 500), ERR.OK, "resize-mixed: move h2 after resize");
+  assertEq(rz2[0], 0, "resize-mixed: h2 x0 stays in col0 after move");
+  assertEq(rz2[2], 400, "resize-mixed: h2 x1 stays in col0 after move");
+
+  // Moving vertical boundary updates horizontal column walls.
+  assertEq(api.move_handle(0, 450, 450), ERR.OK, "resize-mixed: move h0 after resize");
+  assertEq(rz2[2], 450, "resize-mixed: h2 right wall follows h0");
+  assertEq(rz3[0], 450, "resize-mixed: h3 left wall follows h0");
+
+  console.log("[test] resize-mixed regression passed");
 
   /* ========================================================
    * Simple merge tests

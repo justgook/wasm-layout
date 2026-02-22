@@ -71,10 +71,19 @@ static LayoutInfo g_info;
  *
  *   Updated whenever a vertical boundary moves (move_handle on a
  *   AXIS_VERTICAL handle).
+ *
+ * g_handle_row_y0 / g_handle_row_y1:
+ *   For VERTICAL handles only.  The top and bottom y-coordinates of
+ *   the horizontal boundaries that bound this handle's row.
+ *
+ *   Updated whenever a horizontal boundary moves (move_handle on a
+ *   AXIS_HORIZONTAL handle).
  */
 static layout_i32 g_handle_axis[MAX_HANDLES];
 static layout_i32 g_handle_col_x0[MAX_HANDLES];
 static layout_i32 g_handle_col_x1[MAX_HANDLES];
+static layout_i32 g_handle_row_y0[MAX_HANDLES];
+static layout_i32 g_handle_row_y1[MAX_HANDLES];
 
 /* ── Forward declarations ──────────────────────────────────────────── */
 
@@ -111,6 +120,8 @@ layout_i32 init_screen(layout_i32 w, layout_i32 h, layout_i32 handle_size,
         g_handle_axis[i]    = 0;
         g_handle_col_x0[i]  = 0;
         g_handle_col_x1[i]  = 0;
+        g_handle_row_y0[i]  = 0;
+        g_handle_row_y1[i]  = 0;
     }
 
     g_info.initialized      = 1;
@@ -160,12 +171,38 @@ layout_i32 resize_screen(layout_i32 w, layout_i32 h, layout_i32 handle_size) {
         g_info.areas[i].y1 = scale_i32(g_info.areas[i].y1, h, old_h);
     }
 
-    /* Scale all handle coordinates. */
+    /*
+     * Scale handle logical boundary positions.
+     *
+     * For vertical handles, the logical boundary is midpoint x.
+     * For horizontal handles, the logical boundary is midpoint y and
+     * the column walls are g_handle_col_x0/x1.
+     *
+     * Scaling raw rect endpoints directly can shift midpoint by 1px due
+     * to integer truncation. That breaks boundary matching against area
+     * edges (a->x0/x1 or a->y0/y1), causing invalid/inverted handle spans.
+     */
     for (layout_i32 i = 0; i < g_info.handle_count; i++) {
-        g_info.handles[i].x0 = scale_i32(g_info.handles[i].x0, w, old_w);
-        g_info.handles[i].y0 = scale_i32(g_info.handles[i].y0, h, old_h);
-        g_info.handles[i].x1 = scale_i32(g_info.handles[i].x1, w, old_w);
-        g_info.handles[i].y1 = scale_i32(g_info.handles[i].y1, h, old_h);
+        LayoutHandle *hnd = &g_info.handles[i];
+        if (g_handle_axis[i] == AXIS_VERTICAL) {
+            layout_i32 old_bx = (hnd->x0 + hnd->x1) / 2;
+            layout_i32 new_bx = scale_i32(old_bx, w, old_w);
+            hnd->x0 = new_bx;
+            hnd->x1 = new_bx;
+            hnd->y0 = scale_i32(hnd->y0, h, old_h);
+            hnd->y1 = scale_i32(hnd->y1, h, old_h);
+            g_handle_row_y0[i] = scale_i32(g_handle_row_y0[i], h, old_h);
+            g_handle_row_y1[i] = scale_i32(g_handle_row_y1[i], h, old_h);
+        } else {
+            layout_i32 old_by = (hnd->y0 + hnd->y1) / 2;
+            layout_i32 new_by = scale_i32(old_by, h, old_h);
+            hnd->y0 = new_by;
+            hnd->y1 = new_by;
+            hnd->x0 = scale_i32(hnd->x0, w, old_w);
+            hnd->x1 = scale_i32(hnd->x1, w, old_w);
+            g_handle_col_x0[i] = scale_i32(g_handle_col_x0[i], w, old_w);
+            g_handle_col_x1[i] = scale_i32(g_handle_col_x1[i], w, old_w);
+        }
     }
 
     g_info.screen_w         = w;
@@ -240,14 +277,13 @@ static void recompute_handle_rect(layout_i32 idx) {
 }
 
 /*
- * Recompute handle rect for a vertical handle, but only considering
- * areas that are bounded by a specific x-range [col_x0, col_x1].
- * This prevents a horizontal handle from "leaking" across a vertical
- * boundary when two horizontal handles happen to share the same y.
+ * Recompute handle rect using per-handle scope metadata.
  *
- * For vertical handles we use the full-height span (no column filter).
- * For horizontal handles we restrict to areas whose x-range is
- * contained within the column the handle was created in.
+ * Vertical handles are restricted to their row [row_y0, row_y1].
+ * Horizontal handles are restricted to their column [col_x0, col_x1].
+ *
+ * This prevents independent handles from "sticking" together when they
+ * align on the same boundary coordinate in different rows/columns.
  */
 static void recompute_handle_rect_scoped(layout_i32 idx) {
     LayoutHandle *hnd = &g_info.handles[idx];
@@ -256,14 +292,34 @@ static void recompute_handle_rect_scoped(layout_i32 idx) {
 
     if (axis == AXIS_VERTICAL) {
         layout_i32 bx = (hnd->x0 + hnd->x1) / 2;
-        layout_i32 span_y0 = g_info.screen_h;
-        layout_i32 span_y1 = 0;
+        layout_i32 row_y0 = g_handle_row_y0[idx];
+        layout_i32 row_y1 = g_handle_row_y1[idx];
+        layout_i32 span_y0;
+        layout_i32 span_y1;
+        layout_i32 matched = 0;
+
+        if (row_y0 > row_y1) {
+            layout_i32 tmp = row_y0;
+            row_y0 = row_y1;
+            row_y1 = tmp;
+        }
+        if (row_y0 < 0) row_y0 = 0;
+        if (row_y1 > g_info.screen_h) row_y1 = g_info.screen_h;
+
+        span_y0 = row_y1;
+        span_y1 = row_y0;
         for (layout_i32 i = 0; i < g_info.area_count; i++) {
             LayoutArea *a = &g_info.areas[i];
+            if (a->y0 < row_y0 || a->y1 > row_y1) continue;
             if (a->x0 == bx || a->x1 == bx) {
+                matched = 1;
                 if (a->y0 < span_y0) span_y0 = a->y0;
                 if (a->y1 > span_y1) span_y1 = a->y1;
             }
+        }
+        if (!matched || span_y0 > span_y1) {
+            span_y0 = row_y0;
+            span_y1 = row_y1;
         }
         hnd->x0 = bx - hs;
         hnd->x1 = bx + hs;
@@ -284,6 +340,14 @@ static void recompute_handle_rect_scoped(layout_i32 idx) {
          */
         layout_i32 col_x0 = g_handle_col_x0[idx];
         layout_i32 col_x1 = g_handle_col_x1[idx];
+        layout_i32 matched = 0;
+        if (col_x0 > col_x1) {
+            layout_i32 tmp = col_x0;
+            col_x0 = col_x1;
+            col_x1 = tmp;
+        }
+        if (col_x0 < 0) col_x0 = 0;
+        if (col_x1 > g_info.screen_w) col_x1 = g_info.screen_w;
         layout_i32 by     = (hnd->y0 + hnd->y1) / 2;
 
         layout_i32 span_x0 = col_x1; /* start at far end, narrow inward */
@@ -293,9 +357,14 @@ static void recompute_handle_rect_scoped(layout_i32 idx) {
             /* Area must be within the column and touch the boundary. */
             if (a->x0 >= col_x0 && a->x1 <= col_x1 &&
                 (a->y0 == by || a->y1 == by)) {
+                matched = 1;
                 if (a->x0 < span_x0) span_x0 = a->x0;
                 if (a->x1 > span_x1) span_x1 = a->x1;
             }
+        }
+        if (!matched || span_x0 > span_x1) {
+            span_x0 = col_x0;
+            span_x1 = col_x1;
         }
         hnd->y0 = by - hs;
         hnd->y1 = by + hs;
@@ -330,6 +399,16 @@ layout_i32 move_handle(layout_i32 handle_index, layout_i32 x, layout_i32 y) {
          */
         layout_i32 old_bx = (g_info.handles[handle_index].x0 +
                               g_info.handles[handle_index].x1) / 2;
+        layout_i32 row_y0 = g_handle_row_y0[handle_index];
+        layout_i32 row_y1 = g_handle_row_y1[handle_index];
+
+        if (row_y0 > row_y1) {
+            layout_i32 tmp = row_y0;
+            row_y0 = row_y1;
+            row_y1 = tmp;
+        }
+        if (row_y0 < 0) row_y0 = 0;
+        if (row_y1 > g_info.screen_h) row_y1 = g_info.screen_h;
 
         /* Clamp: all left areas must remain >= min wide,
          *        all right areas must remain >= min wide. */
@@ -337,6 +416,7 @@ layout_i32 move_handle(layout_i32 handle_index, layout_i32 x, layout_i32 y) {
         layout_i32 clamp_hi = g_info.screen_w;
         for (layout_i32 i = 0; i < g_info.area_count; i++) {
             LayoutArea *a = &g_info.areas[i];
+            if (a->y0 < row_y0 || a->y1 > row_y1) continue;
             if (a->x1 == old_bx) {
                 /* Left area: new x1 = x, must be >= a->x0 + min */
                 layout_i32 lo = a->x0 + min;
@@ -354,6 +434,7 @@ layout_i32 move_handle(layout_i32 handle_index, layout_i32 x, layout_i32 y) {
         /* Apply to all areas touching old_bx. */
         for (layout_i32 i = 0; i < g_info.area_count; i++) {
             LayoutArea *a = &g_info.areas[i];
+            if (a->y0 < row_y0 || a->y1 > row_y1) continue;
             if (a->x1 == old_bx) a->x1 = x;
             if (a->x0 == old_bx) a->x0 = x;
         }
@@ -364,7 +445,10 @@ layout_i32 move_handle(layout_i32 handle_index, layout_i32 x, layout_i32 y) {
          * in sync so recompute_handle_rect_scoped can filter correctly.
          */
         for (layout_i32 i = 0; i < g_info.handle_count; i++) {
+            layout_i32 by;
             if (g_handle_axis[i] != AXIS_HORIZONTAL) continue;
+            by = (g_info.handles[i].y0 + g_info.handles[i].y1) / 2;
+            if (by < row_y0 || by > row_y1) continue;
             if (g_handle_col_x0[i] == old_bx) g_handle_col_x0[i] = x;
             if (g_handle_col_x1[i] == old_bx) g_handle_col_x1[i] = x;
         }
@@ -381,6 +465,13 @@ layout_i32 move_handle(layout_i32 handle_index, layout_i32 x, layout_i32 y) {
         /* Column bounds for this handle — use explicit metadata, not the rect. */
         layout_i32 col_x0 = g_handle_col_x0[handle_index];
         layout_i32 col_x1 = g_handle_col_x1[handle_index];
+        if (col_x0 > col_x1) {
+            layout_i32 tmp = col_x0;
+            col_x0 = col_x1;
+            col_x1 = tmp;
+        }
+        if (col_x0 < 0) col_x0 = 0;
+        if (col_x1 > g_info.screen_w) col_x1 = g_info.screen_w;
 
         layout_i32 clamp_lo = 0;
         layout_i32 clamp_hi = g_info.screen_h;
@@ -405,6 +496,19 @@ layout_i32 move_handle(layout_i32 handle_index, layout_i32 x, layout_i32 y) {
             if (a->x0 < col_x0 || a->x1 > col_x1) continue;
             if (a->y1 == old_by) a->y1 = y;
             if (a->y0 == old_by) a->y0 = y;
+        }
+
+        /*
+         * Update row bounds for any vertical handle whose top or bottom
+         * wall was this horizontal boundary in this column range.
+         */
+        for (layout_i32 i = 0; i < g_info.handle_count; i++) {
+            layout_i32 bx;
+            if (g_handle_axis[i] != AXIS_VERTICAL) continue;
+            bx = (g_info.handles[i].x0 + g_info.handles[i].x1) / 2;
+            if (bx < col_x0 || bx > col_x1) continue;
+            if (g_handle_row_y0[i] == old_by) g_handle_row_y0[i] = y;
+            if (g_handle_row_y1[i] == old_by) g_handle_row_y1[i] = y;
         }
 
         /* Update this handle's rect. */
@@ -460,6 +564,8 @@ static void remove_handle(layout_i32 dead) {
         g_handle_axis[i]       = g_handle_axis[i + 1];
         g_handle_col_x0[i]     = g_handle_col_x0[i + 1];
         g_handle_col_x1[i]     = g_handle_col_x1[i + 1];
+        g_handle_row_y0[i]     = g_handle_row_y0[i + 1];
+        g_handle_row_y1[i]     = g_handle_row_y1[i + 1];
     }
     g_info.handle_count--;
 }
@@ -728,6 +834,10 @@ layout_i32 move_corner(layout_i32 area_index, layout_i32 corner_index,
         g_info.handles[hnd_idx].y1 = sy1;
         g_info.handles[hnd_idx].content_id = 0;
         g_handle_axis[hnd_idx] = AXIS_VERTICAL;
+        g_handle_col_x0[hnd_idx] = split_x;
+        g_handle_col_x1[hnd_idx] = split_x;
+        g_handle_row_y0[hnd_idx] = sy0;
+        g_handle_row_y1[hnd_idx] = sy1;
         g_info.handle_count++;
 
         /*
@@ -769,6 +879,8 @@ layout_i32 move_corner(layout_i32 area_index, layout_i32 corner_index,
         g_handle_axis[hnd_idx]   = AXIS_HORIZONTAL;
         g_handle_col_x0[hnd_idx] = sx0;  /* left wall of the column at split time */
         g_handle_col_x1[hnd_idx] = sx1;  /* right wall of the column at split time */
+        g_handle_row_y0[hnd_idx] = split_y;
+        g_handle_row_y1[hnd_idx] = split_y;
         g_info.handle_count++;
 
         recompute_handle_rect_scoped(hnd_idx);
